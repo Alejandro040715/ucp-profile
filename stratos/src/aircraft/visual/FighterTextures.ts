@@ -94,7 +94,7 @@ class Painter {
     for (let i = 0; i <= n; i++) {
       const t = i / Math.max(1, n);
       const x = x0 + (x1 - x0) * t + nx * offset, y = y0 + (y1 - y0) * t + ny * offset;
-      const v = raised ? 128 + 26 : 128 - 30;
+      const v = raised ? 128 + 9 : 128 - 12;
       h.fillStyle = `rgb(${v},${v},${v})`;
       h.beginPath();
       h.arc(x, y, 1.6, 0, Math.PI * 2);
@@ -172,18 +172,21 @@ class Painter {
   }
 
   /** soft streak of grime following the airflow (+x on the fuselage canvas) */
-  streak(x: number, y: number, len: number, wid: number, alpha: number, color = '0,0,0'): void {
+  streak(x: number, y: number, len: number, wid: number, alpha: number, color = '0,0,0', vertical = false): void {
     const c = this.color;
-    const g = c.createLinearGradient(x, y, x + len, y);
+    const ex = vertical ? x : x + len, ey = vertical ? y + len : y;
+    const g = c.createLinearGradient(x, y, ex, ey);
     g.addColorStop(0, `rgba(${color},${alpha})`);
     g.addColorStop(1, `rgba(${color},0)`);
     c.fillStyle = g;
+    const cx = (x + ex) / 2, cy = (y + ey) / 2;
+    const rx = vertical ? wid / 2 : len / 2, ry = vertical ? len / 2 : wid / 2;
     c.beginPath();
-    c.ellipse(x + len / 2, y, len / 2, wid / 2, 0, 0, Math.PI * 2);
+    c.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
     c.fill();
     this.rough.fillStyle = `rgba(200,200,200,${alpha * 0.6})`;
     this.rough.beginPath();
-    this.rough.ellipse(x + len / 2, y, len / 2, wid / 2, 0, 0, Math.PI * 2);
+    this.rough.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
     this.rough.fill();
   }
 
@@ -529,7 +532,7 @@ export function paintPanelAtlas(scheme: PaintScheme, specs: { spec: PanelSpec; k
       for (let i = 1; i < ribs; i++) {
         const s = i / ribs;
         const [ax, ay] = toCanvas(s, 0.0, lower), [bx, by] = toCanvas(s, 1, lower);
-        p.line(ax, ay, bx, by, 1.6, 50, 0.1);
+        p.line(ax, ay, bx, by, 1.4, 34, 0.06);
         p.rivetsAlong(ax, ay, bx, by, 10, 6, r);
       }
       // access panels between spars
@@ -589,12 +592,12 @@ export function paintPanelAtlas(scheme: PaintScheme, specs: { spec: PanelSpec; k
       // grime + speckle
       for (let i = 0; i < 80; i++) {
         const [px, py] = toCanvas(r(), r(), lower);
-        p.streak(px, py, 30 + r() * 140, 3 + r() * 5, 0.06 * r());
+        p.streak(px, py, 30 + r() * 140, 3 + r() * 5, 0.05 * r(), '0,0,0', true);
       }
     }
   }
-  p.noiseOverlay(r, 500, 15, 90, 0.05);
-  return p.finish(2.0);
+  p.noiseOverlay(r, 500, 15, 90, 0.04);
+  return p.finish(1.6);
 }
 
 /** Nozzle petals: heat-tinted titanium. */
@@ -602,11 +605,11 @@ export function paintNozzle(W = 512, H = 256): MaterialMaps {
   const p = new Painter(W, H);
   const c = p.color;
   const g = c.createLinearGradient(0, 0, W, 0);
-  g.addColorStop(0, '#5b5650');
-  g.addColorStop(0.35, '#6d5a49');
-  g.addColorStop(0.6, '#4d4a6a');
-  g.addColorStop(0.85, '#3b3a46');
-  g.addColorStop(1, '#2a2a2e');
+  g.addColorStop(0, '#9a948b');
+  g.addColorStop(0.3, '#a08a70');
+  g.addColorStop(0.55, '#7d7a98');
+  g.addColorStop(0.8, '#6a6874');
+  g.addColorStop(1, '#55545a');
   c.fillStyle = g;
   c.fillRect(0, 0, W, H);
   const r = rng(9);
@@ -615,7 +618,7 @@ export function paintNozzle(W = 512, H = 256): MaterialMaps {
     c.fillRect(r() * W, r() * H, 2 + r() * 30, 1 + r() * 3);
   }
   for (let y = 0; y < H; y += 32) p.line(0, y, W, y, 2, 50, 0.2);
-  p.rough.fillStyle = 'rgb(110,110,110)';
+  p.rough.fillStyle = 'rgb(125,125,125)';
   p.rough.fillRect(0, 0, W, H);
-  return p.finish(1.5, 0.85);
+  return p.finish(1.5, 0.8);
 }

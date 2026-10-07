@@ -41,13 +41,20 @@ export function paintPanel(w: number, h: number, labels: PanelLabel[], opts: { s
   const Y = (y: number) => (0.5 - y / h) * H;
   const px = PX_PER_M;
   // base paint with subtle mottling and wear
-  g.fillStyle = opts.base ?? '#2b2e31';
+  g.fillStyle = opts.base ?? '#41464b';
   g.fillRect(0, 0, W, H);
-  for (let i = 0; i < (W * H) / 900; i++) {
-    const a = r() * 0.06;
-    g.fillStyle = r() < 0.5 ? `rgba(255,255,255,${a})` : `rgba(0,0,0,${a})`;
-    const s = 2 + r() * 18;
-    g.fillRect(r() * W, r() * H, s, s * (0.3 + r()));
+  // soft blotches (paint thickness / handling grime) + fine grain
+  for (let i = 0; i < (W * H) / 4000; i++) {
+    const x = r() * W, y = r() * H, rad = 10 + r() * 40;
+    const grd = g.createRadialGradient(x, y, 0, x, y, rad);
+    grd.addColorStop(0, r() < 0.5 ? `rgba(255,255,255,${r() * 0.035})` : `rgba(0,0,0,${r() * 0.05})`);
+    grd.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = grd;
+    g.fillRect(x - rad, y - rad, rad * 2, rad * 2);
+  }
+  for (let i = 0; i < (W * H) / 60; i++) {
+    g.fillStyle = r() < 0.5 ? `rgba(255,255,255,${r() * 0.03})` : `rgba(0,0,0,${r() * 0.04})`;
+    g.fillRect(r() * W, r() * H, 1, 1);
   }
   // edge wear (lighter scuffs near edges)
   for (let i = 0; i < 120; i++) {

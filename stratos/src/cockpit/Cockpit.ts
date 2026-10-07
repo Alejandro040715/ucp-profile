@@ -5,7 +5,8 @@
 
 import {
   BoxGeometry, Color, CylinderGeometry, Group, Mesh, MeshStandardMaterial, Object3D, PlaneGeometry, PointLight, SphereGeometry,
-  TorusGeometry, Vector3, type Texture, CapsuleGeometry, MeshBasicMaterial,
+  TorusGeometry, Vector3, type Texture, CapsuleGeometry, MeshBasicMaterial, Shape, ExtrudeGeometry, CatmullRomCurve3, TubeGeometry,
+  Vector2, CanvasTexture, RepeatWrapping,
 } from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { worldMaterial } from '../render/Materials.ts';
@@ -18,12 +19,51 @@ import { Pilot } from './Pilot.ts';
 import { clamp, damp } from '../core/math.ts';
 import { mergeStatic } from '../render/mergeStatic.ts';
 
-const PAINT = 0x2b2e32;
+// FS 36231-like dark gull grey: reads as grey in daylight, never pure black
+const PAINT = 0x474c51;
 
 function m(color: number, roughness: number, metalness = 0, extra: Partial<MeshStandardMaterial> = {}): MeshStandardMaterial {
   const mm = new MeshStandardMaterial({ color, roughness, metalness });
   Object.assign(mm, extra);
   return ck(mm, 'cpt');
+}
+
+let leatherTex: CanvasTexture | null = null;
+/** small tiling normal map: pebbled leather / padded vinyl */
+function leatherNormal(): CanvasTexture {
+  if (leatherTex) return leatherTex;
+  const N = 128;
+  const h = new Float32Array(N * N);
+  let seed = 7;
+  const r = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let k = 0; k < 900; k++) {
+    const cx = r() * N, cy = r() * N, rad = 1.5 + r() * 3.5;
+    for (let y = -6; y <= 6; y++)
+      for (let x = -6; x <= 6; x++) {
+        const d = Math.hypot(x, y) / rad;
+        if (d < 1) h[(((Math.floor(cy) + y + N) % N) * N) + ((Math.floor(cx) + x + N) % N)] += (1 - d * d) * 0.5;
+      }
+  }
+  const c = document.createElement('canvas');
+  c.width = c.height = N;
+  const g = c.getContext('2d')!;
+  const img = g.createImageData(N, N);
+  for (let y = 0; y < N; y++)
+    for (let x = 0; x < N; x++) {
+      const dx = h[y * N + ((x + 1) % N)] - h[y * N + ((x - 1 + N) % N)];
+      const dy = h[((y + 1) % N) * N + x] - h[((y - 1 + N) % N) * N + x];
+      const l = Math.hypot(dx, dy, 1);
+      const i = (y * N + x) * 4;
+      img.data[i] = (-dx / l * 0.5 + 0.5) * 255;
+      img.data[i + 1] = (dy / l * 0.5 + 0.5) * 255;
+      img.data[i + 2] = (1 / l * 0.5 + 0.5) * 255;
+      img.data[i + 3] = 255;
+    }
+  g.putImageData(img, 0, 0);
+  leatherTex = new CanvasTexture(c);
+  leatherTex.wrapS = leatherTex.wrapT = RepeatWrapping;
+  leatherTex.repeat.set(12, 1);
+  return leatherTex;
 }
 
 interface PanelSpec {
@@ -140,22 +180,39 @@ export class Cockpit {
     add(new BoxGeometry(0.92, 0.5, 0.04), paint, 0, 0.12, -5.38);
     // main panel housing (behind the panel face)
     add(new RoundedBoxGeometry(0.9, 0.42, 0.22, 3, 0.02), paint, 0, 0.58, -4.95, -0.32);
-    // glareshield (anti-glare black) with a soft front lip
-    add(new RoundedBoxGeometry(0.9, 0.05, 0.42, 3, 0.02), black, 0, 0.775, -5.02);
-    const lip = new Mesh(new CylinderGeometry(0.03, 0.03, 0.9, 12, 1, false, 0, Math.PI), black);
-    lip.rotation.z = Math.PI / 2;
-    lip.position.set(0, 0.79, -4.82);
-    this.staticRoot.add(lip);
+    // glareshield coaming: curved plan (follows the windscreen in front and
+    // bulges around the HUD towards the pilot), matte anti-glare finish and a
+    // padded leather lip along the pilot-side edge
+    {
+      const sh = new Shape();
+      sh.moveTo(-0.45, 4.87);
+      sh.bezierCurveTo(-0.3, 4.8, -0.16, 4.765, 0, 4.76);
+      sh.bezierCurveTo(0.16, 4.765, 0.3, 4.8, 0.45, 4.87);
+      sh.lineTo(0.43, 5.12);
+      sh.bezierCurveTo(0.28, 5.24, 0.12, 5.3, 0, 5.3);
+      sh.bezierCurveTo(-0.12, 5.3, -0.28, 5.24, -0.43, 5.12);
+      sh.closePath();
+      const coaming = new Mesh(new ExtrudeGeometry(sh, { depth: 0.035, bevelEnabled: true, bevelThickness: 0.012, bevelSize: 0.012, bevelSegments: 3, curveSegments: 24 }), black);
+      coaming.rotation.x = -Math.PI / 2;
+      coaming.position.y = 0.752; // shape (x, s) -> world (x, z = -s), extrusion -> up
+      this.staticRoot.add(coaming);
+      const edge = new CatmullRomCurve3([
+        new Vector3(-0.45, 0.795, -4.87), new Vector3(-0.3, 0.797, -4.8), new Vector3(-0.15, 0.798, -4.768), new Vector3(0, 0.798, -4.76),
+        new Vector3(0.15, 0.798, -4.768), new Vector3(0.3, 0.797, -4.8), new Vector3(0.45, 0.795, -4.87),
+      ]);
+      this.staticRoot.add(new Mesh(new TubeGeometry(edge, 48, 0.02, 10, false), m(0x1a1b1c, 0.78, 0, { normalMap: leatherNormal(), normalScale: new Vector2(0.5, 0.5) })));
+    }
     // HUD projector body on the glareshield
     add(new RoundedBoxGeometry(0.26, 0.07, 0.22, 2, 0.015), m(0x161719, 0.55, 0.3), 0, 0.825, -4.97);
-    add(new BoxGeometry(0.28, 0.012, 0.014), m(0x111213, 0.4, 0.5), 0, 1.0, -4.95, -0.62);
-    for (const s of [-1, 1]) add(new BoxGeometry(0.012, 0.24, 0.014), m(0x111213, 0.4, 0.5), s * 0.136, 0.905, -4.885, -0.62);
+    const hudFrame = m(0x24272a, 0.35, 0.6);
+    add(new BoxGeometry(0.276, 0.008, 0.012), hudFrame, 0, 1.0, -4.95, -0.62);
+    for (const s of [-1, 1]) add(new BoxGeometry(0.008, 0.24, 0.012), hudFrame, s * 0.137, 0.905, -4.885, -0.62);
     // standby compass on the right of the glareshield
     const comp = new Mesh(new CylinderGeometry(0.03, 0.03, 0.04, 16), m(0x18191b, 0.4));
     comp.rotation.x = Math.PI / 2;
     comp.position.set(0.33, 0.86, -4.95);
     this.staticRoot.add(comp);
-    const compFace = new Mesh(new PlaneGeometry(0.045, 0.03), m(0xd8d0b0, 0.3, 0, { emissive: new Color(0.03, 0.03, 0.02) }));
+    const compFace = new Mesh(new PlaneGeometry(0.04, 0.026), m(0x2a2a26, 0.15, 0, { emissive: new Color(0.012, 0.012, 0.01) }));
     compFace.position.set(0.33, 0.86, -4.928);
     this.staticRoot.add(compFace);
     // canopy handle / grab handles on the arch

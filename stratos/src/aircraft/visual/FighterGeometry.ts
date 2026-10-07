@@ -505,11 +505,11 @@ export function buildNozzlePetal(): BufferGeometry {
     const a0 = -w + (2 * w * i) / segs, a1 = -w + (2 * w * (i + 1)) / segs;
     for (const [r, z0, z1] of [[1, 0, 1]] as const) {
       const p = (a: number, z: number, rr: number) => [Math.sin(a) * rr, Math.cos(a) * rr, z];
+      // outer face wound to face away from the axis, inner face towards it
       const v00 = p(a0, z0, r), v10 = p(a1, z0, r), v01 = p(a0, z1, r), v11 = p(a1, z1, r);
-      pos.push(...v00, ...v10, ...v01, ...v10, ...v11, ...v01);
-      // inner face (slightly smaller radius)
+      pos.push(...v00, ...v01, ...v10, ...v10, ...v01, ...v11);
       const i00 = p(a0, z0, r - 0.05), i10 = p(a1, z0, r - 0.05), i01 = p(a0, z1, r - 0.05), i11 = p(a1, z1, r - 0.05);
-      pos.push(...i00, ...i01, ...i10, ...i10, ...i01, ...i11);
+      pos.push(...i00, ...i10, ...i01, ...i10, ...i11, ...i01);
     }
   }
   const g = new BufferGeometry();

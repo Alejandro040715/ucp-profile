@@ -4,7 +4,7 @@
 // angles and samples the canvas, so symbols stay conformal with the outside
 // world regardless of head position, exactly like a real HUD.
 
-import { AdditiveBlending, CanvasTexture, Color, DoubleSide, Group, LinearFilter, Matrix3, Matrix4, Mesh, PlaneGeometry, ShaderMaterial, Vector3, type Quaternion } from 'three';
+import { AdditiveBlending, CanvasTexture, Color, DoubleSide, Group, LinearMipmapLinearFilter, Matrix3, Matrix4, Mesh, PlaneGeometry, ShaderMaterial, Vector3, type Quaternion } from 'three';
 import type { AircraftPhysics } from '../aircraft/AircraftPhysics.ts';
 import { clamp, DEG, RAD, wrap360 } from '../core/math.ts';
 import { AircraftConfig } from '../aircraft/AircraftConfig.ts';
@@ -42,8 +42,11 @@ export class HUD {
     this.canvas.height = RES;
     this.g = this.canvas.getContext('2d')!;
     this.texture = new CanvasTexture(this.canvas);
-    this.texture.minFilter = LinearFilter;
-    this.texture.generateMipmaps = false;
+    // the canvas is minified ~3-4x on screen: mipmaps keep thin strokes from
+    // breaking up into sparkling fragments
+    this.texture.minFilter = LinearMipmapLinearFilter;
+    this.texture.generateMipmaps = true;
+    this.texture.anisotropy = 4;
     this.glassMat = new ShaderMaterial({
       uniforms: {
         uHud: { value: this.texture },
@@ -89,7 +92,8 @@ export class HUD {
     // world -> body rotation for the glass shader
     this.bodyInv.setFromMatrix4(this.tmpM4.makeRotationFromQuaternion(bodyQuat)).transpose();
     const on = powered && this.power && ctx.mode !== 2;
-    this.glassMat.uniforms.uIntensity.value = on ? (this.brightness * 2.2) / Math.max(0.6, this.exposure) * 1.4 : 0;
+    // bright green against a daylight sky without clipping to white
+    this.glassMat.uniforms.uIntensity.value = on ? (this.brightness * 1.25) / Math.max(0.6, this.exposure) : 0;
     if (!on) return;
     this.draw(ctx);
     this.texture.needsUpdate = true;
@@ -117,11 +121,11 @@ export class HUD {
     g.clearRect(0, 0, RES, RES);
     g.strokeStyle = '#fff';
     g.fillStyle = '#fff';
-    g.lineWidth = 2.6;
+    g.lineWidth = 3.6;
     g.lineCap = 'round';
     g.lineJoin = 'round';
-    g.shadowColor = 'rgba(255,255,255,0.65)';
-    g.shadowBlur = 5;
+    g.shadowColor = 'rgba(255,255,255,0.35)';
+    g.shadowBlur = 3;
     const font = (s: number) => (g.font = `600 ${s}px "JetBrains Mono", "Consolas", monospace`);
     const txt = (s: string, x: number, y: number, size = 26, align: CanvasTextAlign = 'center') => {
       font(size);

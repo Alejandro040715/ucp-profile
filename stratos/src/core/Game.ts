@@ -157,10 +157,13 @@ export class Game {
     }
     this.csm.fade = true;
     this.csm.updateFrustums();
-    const nb = [0.0025, 0.015, 0.12, 0.9];
+    // normal offset ~1.5 shadow texels per cascade (scaled by map resolution)
+    // so thin airfoils at grazing sun angles do not self-shadow into acne
+    const texelScale = 2048 / q.shadowMapSize;
+    const nb = [0.015, 0.15, 0.6, 2.0].map((b) => b * texelScale);
     this.csm.lights.forEach((l, i) => {
       l.shadow.normalBias = nb[i];
-      l.shadow.bias = 0;
+      l.shadow.bias = 0.00002; // ~2.5 cm over the 12 km light range
       l.shadow.radius = i === 0 ? 3 : 2;
     });
     setCSM(this.csm);

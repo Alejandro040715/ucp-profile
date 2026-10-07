@@ -1,0 +1,12 @@
+await page.waitForFunction(() => window.game.terrain.pending === 0, null, { timeout: 240000, polling: 500 });
+await page.evaluate(() => { const g = window.game; g.time.setHours(15.5); g.pipeline.params.ao = 0;
+  const p = g.aircraft.position, q = g.aircraft.quaternion, V = g.camera.position.constructor;
+  g.debugCam = { pos: p.clone().add(new V(-5, 3.2, 10).applyQuaternion(q)), target: p.clone().add(new V(0, 1.6, 4.5).applyQuaternion(q)) };
+  g.camera.fov = 40; g.camera.updateProjectionMatrix(); console.log('nb', g.csm.lights.map((l) => l.shadow.normalBias + '/' + l.shadow.bias + '/' + l.shadow.mapSize.x).join(' ')); });
+await wait(3); await snap('st2_a');
+await page.evaluate(() => { const g = window.game; g.csm.lights.forEach((l) => (l.shadow.normalBias *= 4)); });
+await wait(2); await snap('st2_nb4');
+await page.evaluate(() => { const g = window.game; g.csm.lights.forEach((l) => { l.shadow.normalBias /= 4; l.shadow.bias = -0.0005; }); });
+await wait(2); await snap('st2_bneg');
+await page.evaluate(() => { const g = window.game; g.csm.lights.forEach((l) => { l.shadow.bias = 0.0005; }); });
+await wait(2); await snap('st2_bpos');

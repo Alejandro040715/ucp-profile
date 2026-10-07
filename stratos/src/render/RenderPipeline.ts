@@ -5,12 +5,13 @@
 //   DoF / motion blur (optional) -> bloom -> final (lens, G-effects, ACES).
 
 import {
-  DepthTexture, FloatType, HalfFloatType, LinearFilter, Matrix4, NearestFilter, RGBAFormat, Vector2, Vector3, WebGLRenderer, WebGLRenderTarget,
+  DepthTexture, FloatType, HalfFloatType, LinearFilter, Matrix4, NearestFilter, RGBAFormat, RGFormat, Vector2, Vector3, WebGLRenderer, WebGLRenderTarget,
   type PerspectiveCamera, type Scene, type Texture, Color, UnsignedIntType, NoToneMapping, LinearSRGBColorSpace,
 } from 'three';
 import { FullscreenPass } from './FullscreenPass.ts';
 import { compositeFrag } from './shaders/composite.ts';
 import { downsampleFrag, upsampleFrag, finalFrag, dofMotionFrag } from './shaders/post.ts';
+import { aoFrag, aoBlurFrag } from './shaders/ao.ts';
 import { globals, renderState } from './Globals.ts';
 import type { CloudRenderer } from '../atmosphere/CloudRenderer.ts';
 
@@ -51,6 +52,8 @@ export interface FrameParams {
   aperture: number;
   focal: number;
   motion: number;
+  /** ambient occlusion strength (0 = off) */
+  ao: number;
 }
 
 export function defaultFrameParams(): FrameParams {
@@ -59,7 +62,7 @@ export function defaultFrameParams(): FrameParams {
     gPos: 0, gNeg: 0, gGray: 0, sunScreen: new Vector3(), fade: 0, heat: 1,
     mie: 1, fogDensity: 0, fogBase: 0, fogHeight: 300, fogColor: new Color(0.5, 0.55, 0.6), overcast: 0, overcastColor: new Color(0.5, 0.52, 0.55),
     flash: 0, moonPhase: 0.8, sunVisible: 1, camCloud: 0, cloudFogColor: new Color(0.5, 0.5, 0.5),
-    dof: false, focus: 50, aperture: 2.8, focal: 50, motion: 0,
+    dof: false, focus: 50, aperture: 2.8, focal: 50, motion: 0, ao: 1,
   };
 }
 
@@ -70,6 +73,10 @@ export class RenderPipeline {
   rtHDR!: WebGLRenderTarget;
   rtPost!: WebGLRenderTarget;
   rtDistort!: WebGLRenderTarget;
+  rtAO!: WebGLRenderTarget;
+  rtAO2!: WebGLRenderTarget;
+  private aoPass: FullscreenPass;
+  private aoBlur: FullscreenPass;
   private bloomMips: WebGLRenderTarget[] = [];
   private composite: FullscreenPass;
   private down: FullscreenPass;
@@ -131,7 +138,15 @@ export class RenderPipeline {
       uOvercastColor: { value: new Color() },
       uFlash: { value: 0 },
       uSunVisible: { value: 1 },
+      tAO: { value: null },
+      uAOTexel: { value: new Vector2() },
+      uAOStrength: { value: 1 },
     });
+    this.aoPass = new FullscreenPass(aoFrag, {
+      tDepth: { value: null }, uInvProj: { value: new Matrix4() }, uProjScale: { value: 1 }, uAspect: { value: 1 },
+      uReversed: { value: this.reversed ? 1 : 0 }, uTexel: { value: new Vector2() },
+    });
+    this.aoBlur = new FullscreenPass(aoBlurFrag, { tAO: { value: null }, uDir: { value: new Vector2() } });
     this.down = new FullscreenPass(downsampleFrag, { tSrc: { value: null }, uTexel: { value: new Vector2() }, uFirst: { value: 0 }, uThreshold: { value: 0 } });
     this.up = new FullscreenPass(upsampleFrag, { tSrc: { value: null }, tBase: { value: null }, uTexel: { value: new Vector2() }, uRadius: { value: 1 } });
     this.dofMotion = new FullscreenPass(dofMotionFrag, {
@@ -156,6 +171,8 @@ export class RenderPipeline {
     this.rtHDR?.dispose();
     this.rtPost?.dispose();
     this.rtDistort?.dispose();
+    this.rtAO?.dispose();
+    this.rtAO2?.dispose();
     for (const m of this.bloomMips) m.dispose();
     const depth = new DepthTexture(w, h, this.reversed ? FloatType : UnsignedIntType);
     depth.minFilter = depth.magFilter = NearestFilter;
@@ -165,6 +182,10 @@ export class RenderPipeline {
     this.rtHDR = new WebGLRenderTarget(w, h, { type: HalfFloatType, format: RGBAFormat, depthBuffer: false });
     this.rtPost = new WebGLRenderTarget(w, h, { type: HalfFloatType, format: RGBAFormat, depthBuffer: false });
     this.rtDistort = new WebGLRenderTarget(Math.max(1, w >> 1), Math.max(1, h >> 1), { type: HalfFloatType, format: RGBAFormat, depthBuffer: false });
+    const aw = Math.max(1, w >> 1), ah = Math.max(1, h >> 1);
+    const aoOpts = { type: HalfFloatType, format: RGFormat, depthBuffer: false, minFilter: NearestFilter, magFilter: NearestFilter } as const;
+    this.rtAO = new WebGLRenderTarget(aw, ah, aoOpts);
+    this.rtAO2 = new WebGLRenderTarget(aw, ah, aoOpts);
     this.bloomMips = [];
     let bw = w, bh = h;
     for (let i = 0; i < 6; i++) {
@@ -216,8 +237,29 @@ export class RenderPipeline {
     // 2. clouds
     if (this.clouds && this.clouds.enabled) this.clouds.render(r, depthTex, camera, camPos, this.reversed);
 
-    // 3. composite
+    // 2b. ambient occlusion (half res) + separable bilateral blur
     const cu = this.composite.uniforms;
+    if (p.ao > 0) {
+      const au = this.aoPass.uniforms;
+      au.tDepth.value = depthTex;
+      au.uInvProj.value.copy(camera.projectionMatrixInverse);
+      au.uProjScale.value = camera.projectionMatrix.elements[5];
+      au.uAspect.value = this.width / this.height;
+      au.uTexel.value.set(1 / this.width, 1 / this.height);
+      this.aoPass.render(r, this.rtAO);
+      const bu = this.aoBlur.uniforms;
+      bu.tAO.value = this.rtAO.texture;
+      bu.uDir.value.set(1 / this.rtAO.width, 0);
+      this.aoBlur.render(r, this.rtAO2);
+      bu.tAO.value = this.rtAO2.texture;
+      bu.uDir.value.set(0, 1 / this.rtAO.height);
+      this.aoBlur.render(r, this.rtAO);
+      cu.tAO.value = this.rtAO.texture;
+      cu.uAOTexel.value.set(1 / this.rtAO.width, 1 / this.rtAO.height);
+    }
+    cu.uAOStrength.value = p.ao;
+
+    // 3. composite
     cu.tScene.value = this.rtMain.texture;
     cu.tDepth.value = depthTex;
     cu.tClouds.value = this.clouds?.output ?? null;

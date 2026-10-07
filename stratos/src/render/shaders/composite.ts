@@ -9,6 +9,9 @@ precision highp float;
 varying vec2 vUv;
 uniform sampler2D tScene;
 uniform sampler2D tDepth;
+uniform sampler2D tAO;
+uniform vec2 uAOTexel;
+uniform float uAOStrength;
 uniform sampler2D tClouds;
 uniform sampler2D tCloudDepth;
 uniform float uCamCloud;      // cloud extinction at the camera (1/m) for full-res near fog
@@ -95,6 +98,25 @@ vec3 skyColor(vec3 rd) {
   return c;
 }
 
+// joint-bilateral upsample of the half-res AO (rejects texels across depth edges)
+float aoAt(vec2 uv, float z) {
+  if (z > 900.0) return 1.0;
+  vec2 st = uv / uAOTexel - 0.5;
+  vec2 base = (floor(st) + 0.5) * uAOTexel;
+  vec2 f = fract(st);
+  float sum = 0.0, wsum = 1e-4;
+  for (int j = 0; j < 2; j++) {
+    for (int i = 0; i < 2; i++) {
+      vec2 o = texture2D(tAO, base + vec2(float(i), float(j)) * uAOTexel).rg;
+      float bw = (i == 0 ? 1.0 - f.x : f.x) * (j == 0 ? 1.0 - f.y : f.y);
+      float w = (bw + 1e-3) * exp(-abs(o.g - z) / (0.02 * z + 0.05));
+      sum += o.r * w;
+      wsum += w;
+    }
+  }
+  return sum / wsum;
+}
+
 void main() {
   vec3 col = texture2D(tScene, vUv).rgb;
   float d = texture2D(tDepth, vUv).r;
@@ -109,6 +131,7 @@ void main() {
     col = mix(uFogColor, col, exp(-fogOD));
   } else {
     float dist = length(viewPos);
+    if (uAOStrength > 0.0) col *= mix(1.0, aoAt(vUv, -viewPos.z), uAOStrength);
     // aerial perspective: transmittance along the ray (exponential atmosphere)
     float y0 = uCamPos.y;
     float odR = odExp(y0, rd.y, dist, 8000.0);

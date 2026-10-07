@@ -5,7 +5,7 @@
 // model serves the player, AI traffic, parked aircraft and replays.
 
 import {
-  BoxGeometry, Color, CylinderGeometry, Group, Mesh, MeshStandardMaterial, Object3D, Quaternion, SphereGeometry, TorusGeometry, Vector3,
+  BoxGeometry, Color, CylinderGeometry, Group, Mesh, MeshPhysicalMaterial, MeshStandardMaterial, Object3D, Quaternion, SphereGeometry, TorusGeometry, Vector3,
   type BufferGeometry, type Material, type Texture, DoubleSide, MeshBasicMaterial, AdditiveBlending, ConeGeometry,
 } from 'three';
 import {
@@ -68,7 +68,11 @@ const mapCache = new Map<string, { fus: MaterialMaps; panels: MaterialMaps; peri
 let nozzleMaps: MaterialMaps | null = null;
 
 function paintMaterial(maps: MaterialMaps, key: string): MeshStandardMaterial {
-  const m = new MeshStandardMaterial({
+  // semi-gloss polyurethane topcoat: a faint sharp reflection over the
+  // rougher pigment layer catches the sky along the curvature
+  const m = new MeshPhysicalMaterial({
+    clearcoat: 0.22,
+    clearcoatRoughness: 0.32,
     map: maps.map,
     normalMap: maps.normalMap,
     roughnessMap: maps.ormMap,
@@ -128,7 +132,7 @@ export class FighterModel {
     const hub = worldMaterial(new MeshStandardMaterial({ color: 0x8d9093, roughness: 0.45, metalness: 0.7 }), { hooks: [sunOcclusionHook] });
     const sensorGlass = worldMaterial(new MeshStandardMaterial({ color: 0x3a2a10, roughness: 0.05, metalness: 0.9, emissive: new Color(0.05, 0.03, 0.0) }), { hooks: [sunOcclusionHook] });
     const nozzleMat = worldMaterial(
-      new MeshStandardMaterial({ map: nozzleMaps.map, normalMap: nozzleMaps.normalMap, roughnessMap: nozzleMaps.ormMap, metalnessMap: nozzleMaps.ormMap, roughness: 1, metalness: 1, side: DoubleSide }),
+      new MeshStandardMaterial({ map: nozzleMaps.map, normalMap: nozzleMaps.normalMap, roughnessMap: nozzleMaps.ormMap, metalnessMap: nozzleMaps.ormMap, roughness: 1, metalness: 1 }),
       { hooks: [sunOcclusionHook], key: 'nozzle' },
     );
     this.nozzleGlow = worldMaterial(new MeshStandardMaterial({ color: 0x111111, roughness: 0.8, emissive: new Color(1.0, 0.35, 0.08), emissiveIntensity: 0, side: DoubleSide }), { key: 'glow' });

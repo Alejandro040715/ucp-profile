@@ -28,6 +28,7 @@ attribute vec4 blink;    // period, phase, duty, day
 uniform float uTime;
 uniform float uLightsOn;
 uniform float uPixelScale;
+uniform float uMaxPx;
 uniform vec3 uCamPos;
 varying vec3 vColor;
 varying float vAlpha;
@@ -65,7 +66,7 @@ void main() {
   vAlpha = inten;
   // physical size projected, clamped to a minimum so lights stay visible far away
   float px = params.x / max(dist, 1.0) * uPixelScale;
-  gl_PointSize = clamp(px * 3.0, 2.0, 40.0) * step(0.001, inten);
+  gl_PointSize = clamp(px * 3.0, 2.0, uMaxPx) * step(0.001, inten);
   // brightness compensation when the sprite is clamped to the minimum size
   vColor *= clamp(px * 3.0 / 2.0, 0.15, 1.0) * 1.6;
 }
@@ -125,6 +126,7 @@ export class LightPoints {
         uTime: globals.uTime,
         uLightsOn: globals.uLightsOn,
         uPixelScale: { value: 1000 },
+        uMaxPx: { value: 40 },
         uCamPos: globals.uCurvOrigin,
         uCurvOrigin: globals.uCurvOrigin,
         ...fxDepth,

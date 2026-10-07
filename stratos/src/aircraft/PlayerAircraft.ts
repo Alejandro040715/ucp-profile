@@ -78,6 +78,8 @@ export class PlayerAircraft {
     ];
     void a;
     this.lightSprites = new LightPoints(this.spriteDefs);
+    // own lights are seen up close: keep them compact hard points
+    this.lightSprites.material.uniforms.uMaxPx.value = 18;
     this.bindControls();
     events.on('canopy:move', () => {});
   }
@@ -305,11 +307,15 @@ export class PlayerAircraft {
     const strobeOn = (t % 1.2) < 0.06 || ((t + 0.12) % 1.2) < 0.06;
     const beaconOn = (t % 1.0) < 0.12;
     const on = [this.lights.nav, this.lights.nav, this.lights.nav, this.lights.strobe && strobeOn, this.lights.strobe && strobeOn, this.lights.beacon && beaconOn, this.lights.formation > 0, this.lights.formation > 0];
-    const day = 1 - 0.6 * (1 - globals.uLightsOn.value);
-    const base = [1.4 * day, 1.4 * day, 1.0 * day, 5, 5, 3 * day, 1.2 * this.lights.formation, 1.2 * this.lights.formation];
+    // in daylight the lamps read as small hard points, at night they bloom
+    const night = globals.uLightsOn.value;
+    const day = 1 - 0.6 * (1 - night);
+    const base = [1.4 * day, 1.4 * day, 1.0 * day, 5 * (0.45 + 0.55 * night), 5 * (0.45 + 0.55 * night), 3 * day, 1.2 * this.lights.formation, 1.2 * this.lights.formation];
+    const sizeScale = 0.4 + 0.6 * night;
     anchors.forEach((anc, i) => {
       _v.copy(anc).applyQuaternion(this.renderQuat).add(this.renderPos);
       pos.setXYZ(i, _v.x, _v.y, _v.z);
+      par.setX(i, this.spriteDefs[i].size * sizeScale);
       par.setY(i, powered && on[i] ? base[i] : 0);
     });
     pos.needsUpdate = true;

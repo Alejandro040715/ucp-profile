@@ -4,7 +4,8 @@
 // Includes CDLOD geomorphing, earth curvature, detail bump and sun occlusion
 // (cloud shadows + large-scale terrain shadows).
 
-import { MeshStandardMaterial, Vector3, type Texture, Vector4 } from 'three';
+import { MeshStandardMaterial, Vector2, Vector3, type Texture, Vector4 } from 'three';
+import { AIRPORT, AIRPORT_ELEVATION } from './WorldLayout.ts';
 import { globals } from '../render/Globals.ts';
 import { worldMaterial, type ShaderHook } from '../render/Materials.ts';
 
@@ -14,6 +15,10 @@ export const terrainUniforms = {
   /** xy = origin (world x,z of texel 0), zw = span */
   uHeightTexRect: { value: new Vector4(-80000, -90000, 160000, 160000) },
   uTerrainShadows: { value: 1 },
+  /** air base pads (x, z, dirX, dirZ) + half sizes: coarse LODs never rise above the field */
+  uPads: { value: AIRPORT.pads.map((p) => new Vector4(p.center[0], p.center[1], Math.sin((p.heading * Math.PI) / 180), -Math.cos((p.heading * Math.PI) / 180))) },
+  uPadSize: { value: AIRPORT.pads.map((p) => new Vector2(p.halfLength, p.halfWidth)) },
+  uFieldElev: { value: AIRPORT_ELEVATION },
 };
 
 /** Shared sun-occlusion GLSL: cloud shadows from the weather map + heightmap shadows. */
@@ -80,6 +85,9 @@ const terrainHook: ShaderHook = (shader) => {
       attribute vec4 cover;
       attribute vec2 morph;
       uniform float uLodFactor;
+      uniform vec4 uPads[${AIRPORT.pads.length}];
+      uniform vec2 uPadSize[${AIRPORT.pads.length}];
+      uniform float uFieldElev;
       varying vec4 vCover;
       varying vec3 vWorldPosT;
       varying vec3 vWorldNormalT;
@@ -94,6 +102,16 @@ const terrainHook: ShaderHook = (shader) => {
         float s = morph.y;
         float k = smoothstep(1.35 * s * uLodFactor, 1.9 * s * uLodFactor, d);
         transformed.y = mix(position.y, morph.x, k);
+        // while coarse chunks are on screen, keep them under the air base so
+        // interpolated hills never swallow the runway (margin ~ 1.5 cells)
+        float margin = s / 64.0 * 1.5;
+        float dPad = 1e9;
+        for (int i = 0; i < ${AIRPORT.pads.length}; i++) {
+          vec2 r = wpm.xz - uPads[i].xy;
+          vec2 q = abs(vec2(dot(r, uPads[i].zw), dot(r, vec2(-uPads[i].w, uPads[i].z)))) - uPadSize[i];
+          dPad = min(dPad, length(max(q, 0.0)) + min(max(q.x, q.y), 0.0));
+        }
+        if (dPad < margin) transformed.y = min(transformed.y, uFieldElev - 0.05);
       }`,
     )
     .replace(
