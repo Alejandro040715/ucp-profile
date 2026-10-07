@@ -16,6 +16,20 @@ mkdirSync(join(out, 'assets'), { recursive: true });
 for (const f of assets.filter((f) => f.endsWith('.js'))) copyFileSync(join('dist/assets', f), join(out, 'assets', f));
 // real CC0 textures (public/textures -> dist/textures) ship as sibling files
 if (existsSync('dist/textures')) cpSync('dist/textures', join(out, 'textures'), { recursive: true });
+// F-16 cockpit model (GPL, credits alongside)
+if (existsSync('dist/models')) {
+  cpSync('dist/models', join(out, 'models'), { recursive: true });
+  // the artifact host does not serve .glb: ship it as glTF JSON with the
+  // binary chunk embedded as a data URI (the loader falls back to it)
+  const glb = readFileSync(join(out, 'models/f16-cockpit.glb'));
+  const jsonLen = glb.readUInt32LE(12);
+  const gltf = JSON.parse(glb.subarray(20, 20 + jsonLen).toString('utf8'));
+  const binStart = 20 + jsonLen;
+  const bin = glb.subarray(binStart + 8, binStart + 8 + glb.readUInt32LE(binStart));
+  gltf.buffers = [{ byteLength: bin.length, uri: 'data:application/octet-stream;base64,' + bin.toString('base64') }];
+  writeFileSync(join(out, 'models/f16-cockpit.json'), JSON.stringify(gltf));
+  rmSync(join(out, 'models/f16-cockpit.glb'));
+}
 writeFileSync(
   join(out, 'index.html'),
   `<title>Stratos XF-41 Corvus</title>

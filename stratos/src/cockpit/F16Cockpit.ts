@@ -81,16 +81,20 @@ function f16Material<T extends Material>(m: T): T {
 
 /** Loads the cockpit GLB (never rejects; returns false when unavailable). */
 export async function preloadF16Cockpit(onProgress?: (frac: number) => void): Promise<boolean> {
-  try {
-    const gltf = await new GLTFLoader().loadAsync(new URL('models/f16-cockpit.glb', document.baseURI).href, (e) => {
-      if (e.total) onProgress?.(e.loaded / e.total);
-    });
-    loaded = gltf.scene;
-    return true;
-  } catch (err) {
-    console.warn('F-16 cockpit model not available, using the procedural cockpit', err);
-    return false;
+  // binary glTF, or the same model as glTF JSON (hosts that do not serve .glb)
+  for (const file of ['models/f16-cockpit.glb', 'models/f16-cockpit.json']) {
+    try {
+      const gltf = await new GLTFLoader().loadAsync(new URL(file, document.baseURI).href, (e) => {
+        if (e.total) onProgress?.(e.loaded / e.total);
+      });
+      loaded = gltf.scene;
+      return true;
+    } catch (err) {
+      console.warn(`F-16 cockpit: ${file} not available`, err);
+    }
   }
+  console.warn('F-16 cockpit model not available, using the procedural cockpit');
+  return false;
 }
 
 export function hasF16Cockpit(): boolean {
@@ -162,8 +166,10 @@ export class F16Cockpit {
     });
     // moving parts: own transform, own (cloned) materials
     for (const child of [...this.root.children]) {
-      if (!child.name.startsWith('dyn:')) continue;
-      const key = child.name.slice(4);
+      // GLTFLoader sanitises node names (drops ':'); the original is kept in userData
+      const name = (child.userData.name as string | undefined) ?? child.name;
+      if (!name.startsWith('dyn:')) continue;
+      const key = name.slice(4);
       const part: DynPart = { key, node: child as Group, anims: extras.dyn?.[key]?.anims ?? [], mats: [], baseEmissive: [], maps: [] };
       const textrans = part.anims.some((a) => a.type === 'textranslate');
       child.traverse((o) => {
