@@ -1,0 +1,12 @@
+await wait(6);
+await page.evaluate(() => { const g = window.game; g.spawn('air'); g.weather.set('CLEAR', true); g.weather.current.humidity = 0.95; g.cameras.setMode('CHASE'); g.input.throttle = 1; g.input.afterburner = true; });
+await wait(5);
+await page.evaluate(() => { const g = window.game; g.cameras.orbitYaw = 2.7; g.cameras.orbitPitch = 0.05; g.cameras.chaseDistance = 16; });
+await wait(3);
+await snap('fx2_ab_rear');
+await page.evaluate(() => { const g = window.game; g.cameras.orbitYaw = 1.4; g.cameras.orbitPitch = 0.15; });
+await wait(3);
+await snap('fx2_ab_side');
+await page.evaluate(() => { const g = window.game; g.input.afterburner = false; g.input.throttle = 0.95; window.__pull = setInterval(() => { g.input.axes.pitch = 1; }, 10); g.cameras.orbitYaw = 0.5; g.cameras.orbitPitch = 0.35; });
+await wait(3);
+await snap('fx2_vapor');

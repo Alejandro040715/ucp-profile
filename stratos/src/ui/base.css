@@ -1,0 +1,5 @@
+html,body{margin:0;height:100%;overflow:hidden;background:#000}#viewport{display:block;width:100vw;height:100vh}
+#ui{position:fixed;inset:0;pointer-events:none;font-family:Rajdhani,system-ui,sans-serif;color:#e8f0ea}
+.ck-tooltip{position:fixed;display:none;padding:4px 9px;background:rgba(8,12,10,.78);border:1px solid rgba(120,255,160,.35);border-radius:3px;font:600 13px/1.25 "JetBrains Mono",monospace;color:#bff5cf;white-space:nowrap;letter-spacing:.02em}
+.ck-reticle{position:fixed;left:50%;top:50%;width:6px;height:6px;margin:-3px 0 0 -3px;border-radius:50%;background:rgba(255,255,255,.55);box-shadow:0 0 0 1px rgba(0,0,0,.4);display:none}
+.ck-reticle.active{width:14px;height:14px;margin:-7px 0 0 -7px;background:transparent;border:2px solid rgba(140,255,180,.9)}
