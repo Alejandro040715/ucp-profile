@@ -27,6 +27,19 @@
  `npm run test:physics` vuela escenarios con guion y comprueba los números contra lo esperable en un caza moderno:
  - Reposo en tierra y arranque del motor.
  - Despegue a ~158 kt en MIL.
+@@ -197,3 +217,12 @@
+ 
+ Regenerar: `python3 scripts/f16/fetch.py` (descarga el modelo) y
+ `python3 scripts/f16/convert.py <dir> Models/Cockpit/Main/cockpit.xml <out> "Pilot_ext,Pilot_int" "" scripts/f16/dyn.json`.
++
++
++## HUD through turns and screen-space ray shadows
++
++The HUD now renders after sky composition, so sky pixels cannot erase its symbols while banking. Readouts fit the glass aperture independently of the conformal flight path marker, and automatic camera roll lead is removed.
++
++HIGH and ULTRA add depth-buffer ray-marched sun contact shadows (24 steps, half resolution, bilateral filtering). Use SOMBRAS POR RAYOS in the pause menu to disable them. This is screen-space hybrid rendering, not hardware RTX, full-scene path tracing or ray-traced reflections. Off-screen occluders remain covered by cascaded shadow maps. Rays fade beyond 900 m and at night/overcast.
++
++Validation: 46 unit checks, plus browser GPU tests of standard/reversed-depth ray intersections and complete HUD masks at banks from -120 to +120 degrees.
 --- a/package.json
 +++ b/package.json
 @@ -12,6 +12,8 @@
@@ -40,7 +53,7 @@
      "textures": "node scripts/textures.mjs"
 --- a/public/ENHANCEMENT-CREDITS.md
 +++ b/public/ENHANCEMENT-CREDITS.md
-@@ -42,6 +42,19 @@
+@@ -42,6 +42,28 @@
  Original CC0 license and pack README: `clouds/JANGAFX-LICENSE.txt` and
  `clouds/JANGAFX-README.txt`. The full VDB download is not required at runtime.
  
@@ -63,6 +76,15 @@
 +mechanics. It is not an accurate MISTRAL or ALE-47 simulation. Flares divert nearby
 +IR practice missiles; they do not counter radar missiles. The battery is active
 +only in combat practice. Aircraft damage uses the existing component system.
++
++
++## HUD through turns and screen-space ray shadows
++
++The HUD now renders after sky composition, so sky pixels cannot erase its symbols while banking. Readouts fit the glass aperture independently of the conformal flight path marker, and automatic camera roll lead is removed.
++
++HIGH and ULTRA add depth-buffer ray-marched sun contact shadows (24 steps, half resolution, bilateral filtering). Use SOMBRAS POR RAYOS in the pause menu to disable them. This is screen-space hybrid rendering, not hardware RTX, full-scene path tracing or ray-traced reflections. Off-screen occluders remain covered by cascaded shadow maps. Rays fade beyond 900 m and at night/overcast.
++
++Validation: 46 unit checks, plus browser GPU tests of standard/reversed-depth ray intersections and complete HUD masks at banks from -120 to +120 degrees.
 --- a/src/audio/AudioSystem.ts
 +++ b/src/audio/AudioSystem.ts
 @@ -298,6 +298,14 @@
@@ -102,27 +124,36 @@
      const sh = this.shake(dt, vib, 18 + t.vibration * 6);
      // look-over-the-shoulder: head translates sideways and forward when turning far
      const shoulder = clamp(Math.abs(this.lookYaw) - 1.0, 0, 1.6);
-@@ -181,7 +183,7 @@
+@@ -179,9 +181,9 @@
+     _v.set(eye[0] + hx + sh.x - lean, eye[1] + hy + sh.y + shoulder * 0.02, eye[2] + hz + sh.z - shoulder * 0.05);
+     _v.applyQuaternion(t.quaternion).add(t.position);
      cam.position.copy(_v);
-     // head turns into the roll (instinctive look into the turn)
-     const rollLead = clamp(-t.omega.z * 0.06, -0.12, 0.12);
+-    // head turns into the roll (instinctive look into the turn)
+-    const rollLead = clamp(-t.omega.z * 0.06, -0.12, 0.12);
 -    _e.set(this.lookPitch + sh.y * 2.5, this.lookYaw + rollLead * 0.3, rollLead * 0.15 + sh.x * 2.0, 'YXZ');
-+    _e.set(this.lookPitch, this.lookYaw + rollLead * 0.3 * s, rollLead * 0.15 * s, 'YXZ');
++    // Bank rotates the aircraft and cockpit together. Only deliberate look
++    // input rotates the head; automatic roll lead displaced the gun sight.
++    _e.set(this.lookPitch, this.lookYaw, 0, 'YXZ');
      _q.setFromEuler(_e);
      cam.quaternion.copy(t.quaternion).multiply(_q);
      // dynamic FOV: very subtle widening with speed and narrowing under G
 --- a/src/cockpit/HUD.ts
 +++ b/src/cockpit/HUD.ts
-@@ -4,7 +4,7 @@
+@@ -2,9 +2,10 @@
+ // angular space around the aircraft boresight (focused at infinity). The
+ // combiner glass shader converts each fragment's view direction into body-frame
  // angles and samples the canvas, so symbols stay conformal with the outside
- // world regardless of head position, exactly like a real HUD.
- 
+-// world regardless of head position, exactly like a real HUD.
+-
 -import { AdditiveBlending, CanvasTexture, Color, DoubleSide, Group, LinearMipmapLinearFilter, Matrix3, Matrix4, Mesh, PlaneGeometry, ShaderMaterial, Vector3, type Quaternion } from 'three';
++// world regardless of head position. Readouts use a separate glass-anchored
++// layer so they fit the narrow combiner and remain legible through turns.
++
 +import { AdditiveBlending, CanvasTexture, Color, DoubleSide, Group, LinearMipmapLinearFilter, Matrix3, Matrix4, Mesh, PlaneGeometry, ShaderMaterial, Vector3, Quaternion } from 'three';
  import type { AircraftPhysics } from '../aircraft/AircraftPhysics.ts';
  import { clamp, DEG, RAD, wrap360 } from '../core/math.ts';
  import { AircraftConfig } from '../aircraft/AircraftConfig.ts';
-@@ -22,6 +22,7 @@
+@@ -22,12 +23,16 @@
    units: 'imperial' | 'metric';
    mode: number; // 0 NORM, 1 DECLUTTER, 2 OFF
    time: number;
@@ -130,7 +161,16 @@
  }
  
  export class HUD {
-@@ -35,6 +36,19 @@
+   readonly canvas: HTMLCanvasElement;
+   private g: CanvasRenderingContext2D;
+   readonly texture: CanvasTexture;
++  readonly panelCanvas: HTMLCanvasElement;
++  readonly panelTexture: CanvasTexture;
++  private panelG: CanvasRenderingContext2D;
+   readonly group = new Group();
+   readonly glassMat: ShaderMaterial;
+   brightness = 0.8;
+@@ -35,6 +40,19 @@
    color = new Color(0.45, 1.0, 0.55);
    private bodyInv = new Matrix3();
    private tmpM4 = new Matrix4();
@@ -150,11 +190,24 @@
    exposure = 1;
  
    constructor() {
-@@ -51,20 +65,22 @@
+@@ -42,6 +60,11 @@
+     this.canvas.width = RES;
+     this.canvas.height = RES;
+     this.g = this.canvas.getContext('2d')!;
++    this.panelCanvas = document.createElement('canvas');
++    this.panelCanvas.width = this.panelCanvas.height = RES;
++    this.panelG = this.panelCanvas.getContext('2d')!;
++    this.panelTexture = new CanvasTexture(this.panelCanvas);
++    this.panelTexture.anisotropy = 4;
+     this.texture = new CanvasTexture(this.canvas);
+     // the canvas is minified ~3-4x on screen: mipmaps keep thin strokes from
+     // breaking up into sparkling fragments
+@@ -51,26 +74,32 @@
      this.glassMat = new ShaderMaterial({
        uniforms: {
          uHud: { value: this.texture },
 -        uBodyInv: { value: this.bodyInv },
++        uPanel: { value: this.panelTexture },
 +        uViewToBody: { value: this.bodyInv },
          uColor: { value: this.color },
          uIntensity: { value: 1 },
@@ -165,12 +218,15 @@
 -        varying vec3 vWorldPos;
 -        void main() { vec4 wp = modelMatrix * vec4(position, 1.0); vWorldPos = wp.xyz; gl_Position = projectionMatrix * viewMatrix * wp; }`,
 +        varying vec3 vViewPos;
-+        void main() { vec4 vp = modelViewMatrix * vec4(position, 1.0); vViewPos = vp.xyz; gl_Position = projectionMatrix * vp; }`,
++        varying vec2 vPanelUv;
++        void main() { vec4 vp = modelViewMatrix * vec4(position, 1.0); vViewPos = vp.xyz; vPanelUv = uv; gl_Position = projectionMatrix * vp; }`,
        fragmentShader: /* glsl */ `
 -        uniform sampler2D uHud; uniform mat3 uBodyInv; uniform vec3 uColor; uniform float uIntensity; uniform float uFov; uniform float uElCenter;
 -        varying vec3 vWorldPos;
 +        uniform sampler2D uHud; uniform mat3 uViewToBody; uniform vec3 uColor; uniform float uIntensity; uniform float uFov; uniform float uElCenter;
 +        varying vec3 vViewPos;
++        varying vec2 vPanelUv;
++        uniform sampler2D uPanel;
          void main() {
 -          vec3 d = normalize(uBodyInv * normalize(vWorldPos - cameraPosition));
 +          // View-space subtraction is done on the CPU in modelViewMatrix.
@@ -179,7 +235,35 @@
            // body frame: forward = -z, up = +y, right = +x
            float az = atan(d.x, -d.z);
            float el = atan(d.y, length(vec2(d.x, d.z)));
-@@ -103,9 +119,11 @@
+           vec2 uv = vec2(0.5 + az / uFov, 0.5 + (el - uElCenter) / uFov);
+-          if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) discard;
+-          float s = texture2D(uHud, uv).r;
++          float s = texture2D(uPanel, vPanelUv).r;
++          if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) s = max(s, texture2D(uHud, uv).r);
+           // faint tint of the combiner coating itself
+           vec3 col = uColor * s * uIntensity + vec3(0.002, 0.004, 0.003) * min(uIntensity, 1.0) * 0.6;
+           gl_FragColor = vec4(col, 1.0);
+@@ -78,6 +107,10 @@
+       transparent: true,
+       blending: AdditiveBlending,
+       depthWrite: false,
++      // The imported glass occupies the same plane. Its world-space depth
++      // rounding changed with bank and hid half the projected HUD. The
++      // combiner-sized overlay is drawn last without that coplanar test.
++      depthTest: false,
+       side: DoubleSide,
+     });
+     // combiner glass plates (tilted) above the projector on the glareshield
+@@ -95,6 +128,8 @@
+   /** Moves the combiner glass onto another cockpit's combiner (bbox + normal, body frame). */
+   fitCombiner(a: { min: number[]; max: number[]; n: number[] }): void {
+     const n = new Vector3(a.n[0], a.n[1], a.n[2]).normalize();
++    // The imported normal may face forward. Keep UV +y upright in the cockpit.
++    if (n.z < 0) n.negate();
+     const w = a.max[0] - a.min[0];
+     const h = Math.hypot(a.max[1] - a.min[1], a.max[2] - a.min[2]);
+     this.plate.geometry.dispose();
+@@ -103,9 +138,11 @@
      this.plate.rotation.set(-Math.atan2(n.y, n.z), 0, 0);
    }
  
@@ -193,9 +277,20 @@
      const on = powered && this.power && ctx.mode !== 2;
      // bright green against a daylight sky without clipping to white
      // photocell auto-dimming at night keeps the symbology from blooming
-@@ -132,7 +150,10 @@
+@@ -114,6 +151,7 @@
+     if (!on) return;
+     this.draw(ctx);
+     this.texture.needsUpdate = true;
++    this.panelTexture.needsUpdate = true;
+   }
+ 
+   // angular helpers: (az, el) radians relative to boresight -> canvas px
+@@ -130,9 +168,12 @@
+   }
+ 
    private draw(ctx: HudContext): void {
-     const g = this.g;
+-    const g = this.g;
++    let g = this.g;
      const ac = ctx.ac;
 -    const t = ac.t;
 +    const t = { ...ac.t };
@@ -205,7 +300,7 @@
      const imp = ctx.units === 'imperial';
      const declutter = ctx.mode === 1;
      g.clearRect(0, 0, RES, RES);
-@@ -152,13 +173,15 @@
+@@ -152,15 +193,17 @@
      };
  
      // ---- flight path marker (velocity vector in body frame)
@@ -220,8 +315,44 @@
 +    fpAz = this.smooth('fpAz', fpAz, ctx.dt, Math.PI * 2);
 +    fpEl = this.smooth('fpEl', fpEl, ctx.dt);
      let fx = this.X(fpAz), fy = this.Y(fpEl);
-     const [lx0, ly0] = this.P(-7, 3.6), [lx1, ly1] = this.P(7, -10.5);
+-    const [lx0, ly0] = this.P(-7, 3.6), [lx1, ly1] = this.P(7, -10.5);
++    const [lx0, ly0] = this.P(-4, 2.8), [lx1, ly1] = this.P(4, -9.5);
      const clipped = fx < lx0 || fx > lx1 || fy < ly0 || fy > ly1;
+     fx = clamp(fx, lx0, lx1);
+     fy = clamp(fy, ly0, ly1);
+@@ -268,6 +311,16 @@
+       g.stroke();
+     }
+ 
++    // Readouts belong to the glass, not to the velocity vector or world
++    // horizon. Fit the complete panel to its UV aperture so turns never
++    // push the numbers behind the narrow imported combiner frame.
++    g = this.panelG;
++    g.clearRect(0, 0, RES, RES);
++    g.strokeStyle = g.fillStyle = '#fff';
++    g.lineWidth = 3.6;
++    g.lineCap = g.lineJoin = 'round';
++    g.shadowColor = 'rgba(255,255,255,0.35)';
++    g.shadowBlur = 3;
+     // ---- speed (left) and altitude (right) tapes
+     const ias = imp ? t.ias / 0.5144 : t.ias * 3.6;
+     const alt = imp ? t.altitude / 0.3048 : t.altitude;
+@@ -322,6 +375,7 @@
+       const dist = to.length();
+       to.normalize().applyQuaternion(ac.quaternion.clone().invert());
+       if (to.z < 0) {
++        g = this.g;
+         const az = Math.atan2(to.x, -to.z), el = Math.atan2(to.y, Math.hypot(to.x, to.z));
+         const wx = clamp(this.X(az), lx0, lx1), wy = clamp(this.Y(el), ly0, ly1);
+         g.beginPath();
+@@ -331,6 +385,7 @@
+         g.lineTo(wx - 18, wy);
+         g.closePath();
+         g.stroke();
++        g = this.panelG;
+       }
+       txt(`${ctx.waypoint.name} ${(dist / 1852).toFixed(1)}`, br, this.Y(3.4 * DEG), 22, 'right');
+     }
 --- /dev/null
 +++ b/src/combat/AirDefenseSimulation.ts
 @@ -0,0 +1,119 @@
@@ -715,7 +846,25 @@
    'gear:locked': { down: boolean };
 --- a/src/core/Game.ts
 +++ b/src/core/Game.ts
-@@ -249,6 +249,7 @@
+@@ -105,6 +105,7 @@
+     this.pipeline = new RenderPipeline(canvas);
+     this.pipeline.renderScale = q.renderScale;
+     this.pipeline.msaa = q.msaa;
++    this.pipeline.params.rayShadows = this.settings.rayShadows && ['HIGH', 'ULTRA'].includes(this.settings.quality) ? 1 : 0;
+     const r = this.pipeline.renderer;
+     r.shadowMap.type = PCFShadowMap;
+ 
+@@ -205,6 +206,9 @@
+     // --- the aircraft
+     this.player = new PlayerAircraft(this.sky.lut.texture, 'standard');
+     this.scene.add(this.player.model.root);
++    // The sky composite replaces pixels with no opaque depth. Draw the HUD
++    // afterwards, otherwise banking towards the sky erased half its symbols.
++    this.fxScene.add(this.player.cockpit.hud.group);
+     this.fxScene.add(this.player.lightSprites.points);
+     this.cameras = new CameraSystem(this.camera);
+     this.cameras.baseFov = this.settings.fov;
+@@ -249,6 +253,7 @@
      this.accumulator = 0;
      this.missionTime = 0;
      this.cameras.centerView();
@@ -723,15 +872,35 @@
      events.emit('respawn', {});
      this.combat?.reset();
    }
-@@ -514,7 +515,7 @@
+@@ -514,7 +519,9 @@
      ck.mfdR.update(dt, ctx, main);
      ck.standby.update(dt, ph, ess);
      ck.hud.exposure = this.pipeline.params.exposure;
 -    ck.hud.update({ ac: ph, waypoint: null, warnings: p.warnings, units: this.settings.units, mode: p.hudMode, time: globals.uTime.value }, p.renderQuat, main && inCockpit);
++    ck.hud.group.position.copy(p.renderPos);
++    ck.hud.group.quaternion.copy(p.renderQuat);
 +    ck.hud.update({ ac: ph, waypoint: null, warnings: p.warnings, units: this.settings.units, mode: p.hudMode, time: globals.uTime.value, dt: this.paused ? 0 : dt }, p.renderQuat, main && inCockpit, this.camera.quaternion);
    }
  
    private updatePost(dt: number, inCockpit: boolean): void {
+--- a/src/core/Settings.ts
++++ b/src/core/Settings.ts
+@@ -36,6 +36,7 @@
+   units: 'imperial' | 'metric';
+   hudColor: 'green' | 'amber';
+   showFps: boolean;
++  rayShadows: boolean;
+ }
+ 
+ const DEFAULTS: UserSettings = {
+@@ -50,6 +51,7 @@
+   units: 'imperial',
+   hudColor: 'green',
+   showFps: false,
++  rayShadows: true,
+ };
+ 
+ const KEY = 'stratos.settings.v1';
 --- a/src/input/InputSystem.ts
 +++ b/src/input/InputSystem.ts
 @@ -55,6 +55,7 @@
@@ -779,6 +948,224 @@
    ['I', 'Look back'],
    ['[ / ]', 'Cycle left / right MFD page'],
    ['M', 'Map page on right MFD'],
+--- a/src/render/RenderPipeline.ts
++++ b/src/render/RenderPipeline.ts
+@@ -5,7 +5,7 @@
+ //   DoF / motion blur (optional) -> bloom -> final (lens, G-effects, ACES).
+ 
+ import {
+-  DepthTexture, FloatType, HalfFloatType, LinearFilter, Matrix4, NearestFilter, RGBAFormat, RGFormat, Vector2, Vector3, WebGLRenderer, WebGLRenderTarget,
++  DepthTexture, FloatType, HalfFloatType, LinearFilter, Matrix4, NearestFilter, RGBAFormat, Vector2, Vector3, WebGLRenderer, WebGLRenderTarget,
+   type PerspectiveCamera, type Scene, type Texture, Color, UnsignedIntType, NoToneMapping, LinearSRGBColorSpace,
+ } from 'three';
+ import { FullscreenPass } from './FullscreenPass.ts';
+@@ -54,6 +54,8 @@
+   motion: number;
+   /** ambient occlusion strength (0 = off) */
+   ao: number;
++  /** screen-space ray-traced contact shadows (not hardware RTX/path tracing) */
++  rayShadows: number;
+ }
+ 
+ export function defaultFrameParams(): FrameParams {
+@@ -62,7 +64,7 @@
+     gPos: 0, gNeg: 0, gGray: 0, sunScreen: new Vector3(), fade: 0, heat: 1,
+     mie: 1, fogDensity: 0, fogBase: 0, fogHeight: 300, fogColor: new Color(0.5, 0.55, 0.6), overcast: 0, overcastColor: new Color(0.5, 0.52, 0.55),
+     flash: 0, moonPhase: 0.8, sunVisible: 1, camCloud: 0, cloudFogColor: new Color(0.5, 0.5, 0.5),
+-    dof: false, focus: 50, aperture: 2.8, focal: 50, motion: 0, ao: 1,
++    dof: false, focus: 50, aperture: 2.8, focal: 50, motion: 0, ao: 1, rayShadows: 0,
+   };
+ }
+ 
+@@ -141,10 +143,12 @@
+       tAO: { value: null },
+       uAOTexel: { value: new Vector2() },
+       uAOStrength: { value: 1 },
++      uRayShadowStrength: { value: 0 },
+     });
+     this.aoPass = new FullscreenPass(aoFrag, {
+       tDepth: { value: null }, uInvProj: { value: new Matrix4() }, uProjScale: { value: 1 }, uAspect: { value: 1 },
+       uReversed: { value: this.reversed ? 1 : 0 }, uTexel: { value: new Vector2() },
++      uProj: { value: new Matrix4() }, uSunView: { value: new Vector3() }, uRayShadows: { value: 0 },
+     });
+     this.aoBlur = new FullscreenPass(aoBlurFrag, { tAO: { value: null }, uDir: { value: new Vector2() } });
+     this.down = new FullscreenPass(downsampleFrag, { tSrc: { value: null }, uTexel: { value: new Vector2() }, uFirst: { value: 0 }, uThreshold: { value: 0 } });
+@@ -183,7 +187,7 @@
+     this.rtPost = new WebGLRenderTarget(w, h, { type: HalfFloatType, format: RGBAFormat, depthBuffer: false });
+     this.rtDistort = new WebGLRenderTarget(Math.max(1, w >> 1), Math.max(1, h >> 1), { type: HalfFloatType, format: RGBAFormat, depthBuffer: false });
+     const aw = Math.max(1, w >> 1), ah = Math.max(1, h >> 1);
+-    const aoOpts = { type: HalfFloatType, format: RGFormat, depthBuffer: false, minFilter: NearestFilter, magFilter: NearestFilter } as const;
++    const aoOpts = { type: HalfFloatType, format: RGBAFormat, depthBuffer: false, minFilter: NearestFilter, magFilter: NearestFilter } as const;
+     this.rtAO = new WebGLRenderTarget(aw, ah, aoOpts);
+     this.rtAO2 = new WebGLRenderTarget(aw, ah, aoOpts);
+     this.bloomMips = [];
+@@ -239,10 +243,13 @@
+ 
+     // 2b. ambient occlusion (half res) + separable bilateral blur
+     const cu = this.composite.uniforms;
+-    if (p.ao > 0) {
++    if (p.ao > 0 || p.rayShadows > 0) {
+       const au = this.aoPass.uniforms;
+       au.tDepth.value = depthTex;
+       au.uInvProj.value.copy(camera.projectionMatrixInverse);
++      au.uProj.value.copy(camera.projectionMatrix);
++      au.uSunView.value.copy(globals.uSunDir.value).transformDirection(camera.matrixWorldInverse);
++      au.uRayShadows.value = p.rayShadows;
+       au.uProjScale.value = camera.projectionMatrix.elements[5];
+       au.uAspect.value = this.width / this.height;
+       au.uTexel.value.set(1 / this.width, 1 / this.height);
+@@ -258,6 +265,7 @@
+       cu.uAOTexel.value.set(1 / this.rtAO.width, 1 / this.rtAO.height);
+     }
+     cu.uAOStrength.value = p.ao;
++    cu.uRayShadowStrength.value = p.rayShadows;
+ 
+     // 3. composite
+     cu.tScene.value = this.rtMain.texture;
+--- a/src/render/shaders/ao.ts
++++ b/src/render/shaders/ao.ts
+@@ -2,12 +2,15 @@
+ // buffer alone, at half resolution. The world radius scales with distance so
+ // it covers both cockpit switches (~10 cm) and the airframe from a chase view
+ // (~1 m), and fades out on far terrain. Output: r = AO, g = view depth (for
+-// the bilateral blur / upsample).
++// the bilateral blur / upsample), b = ray-marched sun visibility.
+ 
+ export const aoFrag = /* glsl */ `
+ precision highp float;
+ uniform sampler2D tDepth;
+ uniform mat4 uInvProj;
++uniform mat4 uProj;
++uniform vec3 uSunView;
++uniform float uRayShadows;
+ uniform float uProjScale; // proj[1][1]
+ uniform float uAspect;
+ uniform float uReversed;
+@@ -22,9 +25,37 @@
+ }
+ vec3 viewPosAt(vec2 uv) { return viewPos(uv, rawDepth(uv)); }
+ 
++// Short rays towards the sun intersect the resolved scene depth. Geometry
++// outside the viewport is handled by the existing cascaded shadow maps.
++// No temporal accumulation: moving aircraft and sights cannot leave trails.
++float sunVisibility(vec3 P, vec3 N) {
++  float dist = -P.z;
++  if (uRayShadows < 0.5 || dist > 900.0 || dot(N, uSunView) <= 0.05) return 1.0;
++  float rayLength = clamp(dist * 0.18, 0.22, 40.0);
++  float bias = max(0.003, dist * 0.00015);
++  vec3 start = P + N * bias;
++  for (int i = 1; i <= 24; i++) {
++    float f = float(i) / 24.0;
++    float travel = rayLength * f * f + bias;
++    vec3 Q = start + uSunView * travel;
++    if (Q.z >= -0.03) break;
++    vec4 clip = uProj * vec4(Q, 1.0);
++    vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
++    if (any(lessThan(uv, vec2(0.002))) || any(greaterThan(uv, vec2(0.998)))) break;
++    float d = rawDepth(uv);
++    if (isSky(d)) continue;
++    float separation = viewPos(uv, d).z - Q.z;
++    float thickness = max(0.018, rayLength * 0.3);
++    if (separation > bias && separation < thickness) {
++      return mix(0.0, 1.0, smoothstep(0.7, 1.0, f));
++    }
++  }
++  return 1.0;
++}
++
+ void main() {
+   float d = rawDepth(vUv);
+-  if (isSky(d)) { gl_FragColor = vec4(1.0, 60000.0, 0.0, 1.0); return; } // half-float safe sentinel
++  if (isSky(d)) { gl_FragColor = vec4(1.0, 60000.0, 1.0, 1.0); return; } // half-float safe sentinel
+   vec3 P = viewPos(vUv, d);
+   float dist = -P.z;
+   // normal from the flattest neighbour pair (avoids smearing across edges)
+@@ -54,7 +85,7 @@
+   ao = pow(ao, 1.4);
+   // fade on distant scenery (terrain relief is already in the lighting)
+   ao = mix(ao, 1.0, smoothstep(250.0, 900.0, dist));
+-  gl_FragColor = vec4(ao, min(dist, 60000.0), 0.0, 1.0);
++  gl_FragColor = vec4(ao, min(dist, 60000.0), sunVisibility(P, N), 1.0);
+ }
+ `;
+ 
+@@ -65,19 +96,20 @@
+ uniform vec2 uDir;
+ varying vec2 vUv;
+ void main() {
+-  vec2 c = texture2D(tAO, vUv).rg;
+-  if (c.g > 900.0) { gl_FragColor = vec4(1.0, c.g, 0.0, 1.0); return; }
++  vec3 c = texture2D(tAO, vUv).rgb;
++  if (c.g > 900.0) { gl_FragColor = vec4(1.0, c.g, 1.0, 1.0); return; }
+   float tol = 0.03 * c.g + 0.05;
+-  float sum = c.r, wsum = 1.0;
++  vec2 sum = c.rb;
++  float wsum = 1.0;
+   for (int i = 1; i <= 4; i++) {
+     float g = exp(-float(i * i) / 10.0);
+     for (int s = -1; s <= 1; s += 2) {
+-      vec2 o = texture2D(tAO, vUv + uDir * float(i * s)).rg;
++      vec3 o = texture2D(tAO, vUv + uDir * float(i * s)).rgb;
+       float w = g * exp(-abs(o.g - c.g) / tol);
+-      sum += o.r * w;
++      sum += o.rb * w;
+       wsum += w;
+     }
+   }
+-  gl_FragColor = vec4(sum / wsum, c.g, 0.0, 1.0);
++  gl_FragColor = vec4(sum.x / wsum, c.g, sum.y / wsum, 1.0);
+ }
+ `;
+--- a/src/render/shaders/composite.ts
++++ b/src/render/shaders/composite.ts
+@@ -12,6 +12,7 @@
+ uniform sampler2D tAO;
+ uniform vec2 uAOTexel;
+ uniform float uAOStrength;
++uniform float uRayShadowStrength;
+ uniform sampler2D tClouds;
+ uniform sampler2D tCloudDepth;
+ uniform float uCamCloud;      // cloud extinction at the camera (1/m) for full-res near fog
+@@ -99,18 +100,19 @@
+ }
+ 
+ // joint-bilateral upsample of the half-res AO (rejects texels across depth edges)
+-float aoAt(vec2 uv, float z) {
+-  if (z > 900.0) return 1.0;
++vec2 occlusionAt(vec2 uv, float z) {
++  if (z > 900.0) return vec2(1.0);
+   vec2 st = uv / uAOTexel - 0.5;
+   vec2 base = (floor(st) + 0.5) * uAOTexel;
+   vec2 f = fract(st);
+-  float sum = 0.0, wsum = 1e-4;
++  vec2 sum = vec2(0.0);
++  float wsum = 1e-4;
+   for (int j = 0; j < 2; j++) {
+     for (int i = 0; i < 2; i++) {
+-      vec2 o = texture2D(tAO, base + vec2(float(i), float(j)) * uAOTexel).rg;
++      vec3 o = texture2D(tAO, base + vec2(float(i), float(j)) * uAOTexel).rgb;
+       float bw = (i == 0 ? 1.0 - f.x : f.x) * (j == 0 ? 1.0 - f.y : f.y);
+       float w = (bw + 1e-3) * exp(-abs(o.g - z) / (0.02 * z + 0.05));
+-      sum += o.r * w;
++      sum += o.rb * w;
+       wsum += w;
+     }
+   }
+@@ -131,7 +133,13 @@
+     col = mix(uFogColor, col, exp(-fogOD));
+   } else {
+     float dist = length(viewPos);
+-    if (uAOStrength > 0.0) col *= mix(1.0, aoAt(vUv, -viewPos.z), uAOStrength);
++    if (uAOStrength > 0.0 || uRayShadowStrength > 0.0) {
++      vec2 visibility = occlusionAt(vUv, -viewPos.z);
++      col *= mix(1.0, visibility.x, uAOStrength);
++      // Preserve ambient sky light in shadow; only supplement direct sunlight.
++      float direct = uRayShadowStrength * (1.0 - uNight) * (1.0 - uOvercast);
++      col *= mix(1.0, mix(0.65, 1.0, visibility.y), direct);
++    }
+     // aerial perspective: transmittance along the ray (exponential atmosphere)
+     float y0 = uCamPos.y;
+     float odR = odExp(y0, rd.y, dist, 8000.0);
 --- a/src/ui/UI.ts
 +++ b/src/ui/UI.ts
 @@ -55,8 +55,8 @@
@@ -792,7 +1179,19 @@
      const spawns: [SpawnKind, string, string][] = [
        ['cold', 'COLD &amp; DARK', 'On the apron, canopy open, every system off. Start it from the switches — or press O.'],
        ['ready', 'READY FOR TAKEOFF', 'Lined up on the runway, engine at idle, flaps TO, parking brake set.'],
-@@ -170,6 +170,7 @@
+@@ -105,6 +105,11 @@
+       u.searchParams.delete('q');
+       location.href = u.toString();
+     });
++    this.select(opts, 'SOMBRAS POR RAYOS', [['ON', 'Activadas · HIGH / ULTRA'], ['OFF', 'Desactivadas']], game.settings.rayShadows ? 'ON' : 'OFF', (v) => {
++      game.settings.rayShadows = v === 'ON';
++      game.pipeline.params.rayShadows = game.settings.rayShadows && ['HIGH', 'ULTRA'].includes(game.settings.quality) ? 1 : 0;
++      saveSettings(game.settings);
++    });
+     const foot = el('div', 'ui-foot', panel);
+     foot.innerHTML = '<b>H</b> controls &nbsp;·&nbsp; <b>Esc</b> pause &nbsp;·&nbsp; click the view to capture the mouse, click again to press the cockpit control under the reticle';
+     const credit = el('div', 'ui-foot', panel);
+@@ -170,6 +175,7 @@
    private fly(kind: SpawnKind): void {
      const g = this.game;
      g.audio.start();
@@ -802,9 +1201,9 @@
      this.started = true;
 --- /dev/null
 +++ b/tests/camera.test.ts
-@@ -0,0 +1,28 @@
+@@ -0,0 +1,51 @@
 +import assert from 'node:assert/strict';
-+import { PerspectiveCamera, Quaternion, Vector3 } from 'three';
++import { Euler, PerspectiveCamera, Quaternion, Vector3 } from 'three';
 +import { CameraSystem, type CameraTarget } from '../src/camera/CameraSystem.ts';
 +
 +const t: CameraTarget = { position: new Vector3(90000, 1600, -90000), quaternion: new Quaternion(),
@@ -828,6 +1227,29 @@
 +  for (let i = 0; i < 240; i++) {
 +    system.update(1 / 60, loaded);
 +    assert.ok(camera.position.distanceTo(eye) < 1e-8); assert.ok(camera.quaternion.angleTo(orientation) < 1e-7);
++  }
++});
++test('Yaw, bank and roll rate cannot displace the sight relative to the cockpit', () => {
++  const camera = new PerspectiveCamera(), system = new CameraSystem(camera);
++  system.shakeScale = 0;
++  system.update(1 / 60, t);
++  const baseline = t.quaternion.clone().invert().multiply(camera.quaternion);
++  for (const yaw of [-2.5, 0, 2.5]) for (const bank of [-2.2, -1.1, 0, 1.1, 2.2]) {
++    const quaternion = new Quaternion().setFromEuler(new Euler(0.3, yaw, bank, 'YXZ'));
++    for (const rate of [-3, 0, 3]) {
++      system.update(1 / 60, { ...t, quaternion, omega: new Vector3(0.4, 0.2, rate) });
++      const relative = quaternion.clone().invert().multiply(camera.quaternion);
++      assert.ok(relative.angleTo(baseline) < 1e-7);
++    }
++  }
++});
++test('Turning with camera shake enabled still has no automatic head rotation', () => {
++  const camera = new PerspectiveCamera(), system = new CameraSystem(camera);
++  system.update(1 / 60, t);
++  const baseline = camera.quaternion.clone();
++  for (const rate of [-5, 5]) {
++    system.update(1 / 60, { ...t, omega: new Vector3(0, 0, rate) });
++    assert.ok(camera.quaternion.angleTo(baseline) < 1e-7);
 +  }
 +});
 +console.log(`${count} camera checks passed`);
