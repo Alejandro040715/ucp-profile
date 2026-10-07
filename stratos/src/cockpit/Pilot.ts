@@ -2,13 +2,100 @@
 // oxygen mask, gloves and boots. Arms and legs use analytic two-bone IK so the
 // hands stay on the side-stick / throttle grips and the feet on the pedals.
 
-import { CapsuleGeometry, Color, Group, Mesh, MeshStandardMaterial, Object3D, SphereGeometry, Vector3, BoxGeometry, CylinderGeometry, type Material } from 'three';
+import {
+  CapsuleGeometry, Color, Group, Mesh, MeshStandardMaterial, Object3D, SphereGeometry, Vector3, BoxGeometry, CylinderGeometry, type Material,
+  CanvasTexture, RepeatWrapping, SRGBColorSpace, Vector2, Quaternion, Matrix4,
+} from 'three';
 import { worldMaterial } from '../render/Materials.ts';
 
 const UP = new Vector3(0, 1, 0);
+const _a = new Vector3();
+const _b = new Vector3();
+const _c = new Vector3();
+const _d = new Vector3();
+const _m = new Matrix4();
 
 function mat(color: number, rough: number, metal = 0): MeshStandardMaterial {
   return worldMaterial(new MeshStandardMaterial({ color, roughness: rough, metalness: metal }), { key: 'pilot' });
+}
+
+/** Nomex twill: diagonal weave normal map + faint colour mottling (tiling). */
+function twill(): { normal: CanvasTexture; color: CanvasTexture } {
+  const N = 128;
+  const h = new Float32Array(N * N);
+  for (let y = 0; y < N; y++)
+    for (let x = 0; x < N; x++) {
+      const d = ((x + y) % 8) / 8; // 45 degree ribs every 8 px
+      const weft = Math.sin(((x - y) / N) * Math.PI * 32) * 0.15;
+      h[y * N + x] = Math.sin(d * Math.PI) + weft;
+    }
+  const mk = (fill: (img: ImageData) => void) => {
+    const c = document.createElement('canvas');
+    c.width = c.height = N;
+    const g = c.getContext('2d')!;
+    const img = g.createImageData(N, N);
+    fill(img);
+    g.putImageData(img, 0, 0);
+    const t = new CanvasTexture(c);
+    t.wrapS = t.wrapT = RepeatWrapping;
+    t.repeat.set(10, 6);
+    return t;
+  };
+  const normal = mk((img) => {
+    for (let y = 0; y < N; y++)
+      for (let x = 0; x < N; x++) {
+        const dx = (h[y * N + ((x + 1) % N)] - h[y * N + ((x + N - 1) % N)]) * 0.6;
+        const dy = (h[((y + 1) % N) * N + x] - h[((y + N - 1) % N) * N + x]) * 0.6;
+        const l = Math.hypot(dx, dy, 1);
+        const i = (y * N + x) * 4;
+        img.data[i] = (-dx / l * 0.5 + 0.5) * 255;
+        img.data[i + 1] = (dy / l * 0.5 + 0.5) * 255;
+        img.data[i + 2] = (1 / l * 0.5 + 0.5) * 255;
+        img.data[i + 3] = 255;
+      }
+  });
+  let seed = 3;
+  const r = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const color = mk((img) => {
+    for (let i = 0; i < N * N; i++) {
+      const v = 235 + Math.floor(r() * 20);
+      img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = v;
+      img.data[i * 4 + 3] = 255;
+    }
+  });
+  color.colorSpace = SRGBColorSpace;
+  return { normal, color };
+}
+
+/** checklist card for the kneeboard */
+function kneeboardTexture(): CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 384;
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#e9e4d6';
+  g.fillRect(0, 0, 256, 384);
+  g.fillStyle = '#1d1f22';
+  g.font = '700 20px "Arial Narrow", Arial, sans-serif';
+  g.fillText('XF-41  BEFORE TAKEOFF', 14, 32);
+  g.fillRect(14, 40, 228, 2);
+  g.font = '500 15px "Arial Narrow", Arial, sans-serif';
+  const items = ['CANOPY .......... CLOSED/LOCKED', 'FLAPS ............ TO', 'TRIM ............. SET', 'FCS .............. ASSIST', 'FUEL ............. CHECK', 'WARNINGS ......... CLEAR', 'LIGHTS ........... AS REQ', 'PARK BRAKE ....... OFF'];
+  items.forEach((t, i) => g.fillText(t, 14, 72 + i * 24));
+  g.font = '700 18px "Arial Narrow", Arial, sans-serif';
+  g.fillText('V-SPEEDS', 14, 290);
+  g.font = '500 15px "Arial Narrow", Arial, sans-serif';
+  g.fillText('ROTATE 150 KT   APPROACH 155 KT', 14, 314);
+  g.fillText('TD AOA 11-13 DEG   MAX G 9.0', 14, 338);
+  g.strokeStyle = 'rgba(30,60,140,0.6)';
+  g.lineWidth = 2;
+  g.beginPath();
+  g.moveTo(150, 120);
+  g.lineTo(236, 112);
+  g.stroke();
+  const t = new CanvasTexture(c);
+  t.colorSpace = SRGBColorSpace;
+  return t;
 }
 
 class Bone {
@@ -45,9 +132,10 @@ export function solveTwoBone(root: Vector3, target: Vector3, l1: number, l2: num
 export class Pilot {
   readonly root = new Group();
   readonly head = new Group();
-  private suit = mat(0x4d5240, 0.88);
+  private suit = mat(0x5a5f4a, 0.92);
   private harness = mat(0x23262a, 0.7);
-  private glove = mat(0x2e241d, 0.62);
+  private glove = mat(0x55553f, 0.8);
+  private kneeboard: Group;
   private boot = mat(0x141414, 0.55);
   private upperArmL: Bone;
   private lowerArmL: Bone;
@@ -69,6 +157,22 @@ export class Pilot {
   private vest: Mesh;
 
   constructor() {
+    const weave = twill();
+    for (const m of [this.suit, this.glove]) {
+      m.normalMap = weave.normal;
+      m.normalScale = new Vector2(0.45, 0.45);
+      m.map = weave.color;
+    }
+    // kneeboard strapped to the right thigh
+    this.kneeboard = new Group();
+    const board = new Mesh(new BoxGeometry(0.135, 0.006, 0.2), [mat(0x1b1c1e, 0.6), mat(0x1b1c1e, 0.6), worldMaterial(new MeshStandardMaterial({ map: kneeboardTexture(), roughness: 0.85 }), { key: 'pilot' }), mat(0x1b1c1e, 0.6), mat(0x1b1c1e, 0.6), mat(0x1b1c1e, 0.6)]);
+    this.kneeboard.add(board);
+    for (const z of [-0.06, 0.07]) {
+      const strap = new Mesh(new BoxGeometry(0.16, 0.012, 0.022), mat(0x2b2d2a, 0.8));
+      strap.position.set(0, -0.004, z);
+      this.kneeboard.add(strap);
+    }
+    this.root.add(this.kneeboard);
     // torso + vest + harness
     this.torso = new Mesh(new CapsuleGeometry(0.17, 0.32, 6, 14), this.suit);
     this.torso.position.set(0, 0.47, -4.0);
@@ -162,6 +266,15 @@ export class Pilot {
     solveTwoBone(this.hipR, footR, 0.46, 0.45, new Vector3(0.2, 1.2, -4.8), e);
     this.thighR.set(this.hipR, e, 0.075);
     this.shinR.set(e, footR, 0.058);
+    // kneeboard rides on top of the right thigh, long side along the femur
+    {
+      const along = _a.subVectors(e, this.hipR).normalize();
+      const side = _b.crossVectors(along, UP).normalize();
+      const top = _c.crossVectors(side, along).normalize();
+      this.kneeboard.position.copy(this.hipR).lerp(e, 0.62).addScaledVector(top, 0.078);
+      _m.makeBasis(side, top, _d.copy(along).negate());
+      this.kneeboard.quaternion.setFromRotationMatrix(_m);
+    }
     this.footL.position.copy(footL).add(new Vector3(0, -0.02, -0.08));
     this.footR.position.copy(footR).add(new Vector3(0, -0.02, -0.08));
     this.footL.rotation.x = this.footR.rotation.x = -0.35;

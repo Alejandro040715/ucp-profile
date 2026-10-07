@@ -211,7 +211,10 @@ export class CameraSystem {
     _v.applyQuaternion(this.chaseQuat);
     cam.position.copy(this.chasePos).add(_v);
     // look slightly ahead along the trajectory (anticipation)
-    const ahead = _v2.copy(t.velocity).multiplyScalar(0.06).clampLength(0, 18);
+    // anticipation only when looking along the flight path (orbiting to the
+    // side or front would push the aircraft off-screen)
+    const along = Math.max(0, Math.cos(this.orbitYaw)) * Math.max(0, Math.cos(this.orbitPitch));
+    const ahead = _v2.copy(t.velocity).multiplyScalar(0.06 * along).clampLength(0, 18);
     const target = new Vector3().copy(t.position).add(ahead).add(new Vector3(0, 1.0, 0).applyQuaternion(this.chaseQuat));
     // camera roll follows the aircraft's frame (partially)
     const up = new Vector3(0, 1, 0).applyQuaternion(this.chaseQuat).lerp(new Vector3(0, 1, 0), 0.35).normalize();

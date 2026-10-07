@@ -84,7 +84,11 @@ void main() {
   float fall = (1.0 - t) * smoothstep(0.0, 0.08, t) * rim;
   // stronger near the viewer: distortion is an angular effect
   float dist = clamp(30.0 / max(vViewZ, 1.0), 0.15, 1.0);
-  gl_FragColor = vec4(grad * 0.004 * uStrength * fall * dist, 0.0, 1.0);
+  // real heat shimmer displaces the background by a few pixels at most
+  vec2 off = grad * 0.0004 * uStrength * fall * dist;
+  float l = length(off);
+  if (l > 0.0035) off *= 0.0035 / l;
+  gl_FragColor = vec4(off, 0.0, 1.0);
 }`;
 
 const mistFrag = /* glsl */ `
@@ -305,7 +309,7 @@ export class AircraftEffects {
     const ab = e.abFraction;
     const altK = 1 + clamp(ac.position.y / 12000, 0, 1) * 0.6;
     const flicker = 0.9 + 0.1 * Math.sin(this.time * 47) * Math.sin(this.time * 31);
-    const lenO = (3.2 + 3.8 * ab) * altK * flicker;
+    const lenO = (2.8 + 3.0 * ab) * altK * flicker;
     const lenC = (1.6 + 2.0 * ab) * altK;
     this.flameOuter.scale.set(1 + 0.25 * (altK - 1), 1 + 0.25 * (altK - 1), lenO);
     this.flameCore.scale.set(1, 1, lenC);

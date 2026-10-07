@@ -126,7 +126,7 @@ export class LightPoints {
         uTime: globals.uTime,
         uLightsOn: globals.uLightsOn,
         uPixelScale: { value: 1000 },
-        uMaxPx: { value: 40 },
+        uMaxPx: { value: 28 },
         uCamPos: globals.uCurvOrigin,
         uCurvOrigin: globals.uCurvOrigin,
         ...fxDepth,

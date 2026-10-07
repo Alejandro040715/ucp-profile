@@ -8,6 +8,7 @@ import { AdditiveBlending, CanvasTexture, Color, DoubleSide, Group, LinearMipmap
 import type { AircraftPhysics } from '../aircraft/AircraftPhysics.ts';
 import { clamp, DEG, RAD, wrap360 } from '../core/math.ts';
 import { AircraftConfig } from '../aircraft/AircraftConfig.ts';
+import { globals } from '../render/Globals.ts';
 
 const FOV = 25 * DEG; // canvas angular extent (square)
 const EL_CENTER = -4 * DEG; // canvas centre elevation relative to boresight
@@ -71,7 +72,7 @@ export class HUD {
           if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) discard;
           float s = texture2D(uHud, uv).r;
           // faint tint of the combiner coating itself
-          vec3 col = uColor * s * uIntensity + vec3(0.002, 0.004, 0.003);
+          vec3 col = uColor * s * uIntensity + vec3(0.002, 0.004, 0.003) * min(uIntensity, 1.0) * 0.6;
           gl_FragColor = vec4(col, 1.0);
         }`,
       transparent: true,
@@ -93,7 +94,9 @@ export class HUD {
     this.bodyInv.setFromMatrix4(this.tmpM4.makeRotationFromQuaternion(bodyQuat)).transpose();
     const on = powered && this.power && ctx.mode !== 2;
     // bright green against a daylight sky without clipping to white
-    this.glassMat.uniforms.uIntensity.value = on ? (this.brightness * 1.25) / Math.max(0.6, this.exposure) : 0;
+    // photocell auto-dimming at night keeps the symbology from blooming
+    const auto = 1 - 0.55 * globals.uNight.value;
+    this.glassMat.uniforms.uIntensity.value = on ? (this.brightness * 1.25 * auto) / Math.max(0.6, this.exposure) : 0;
     if (!on) return;
     this.draw(ctx);
     this.texture.needsUpdate = true;
