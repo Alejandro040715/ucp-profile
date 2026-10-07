@@ -224,6 +224,11 @@ export class PushButton extends CockpitControl {
     this.root.add(this.cap);
   }
 
+  /** true while the button is held in after a press */
+  get pressing(): boolean {
+    return this.pressTimer > 0;
+  }
+
   override activate(): void {
     this.pressTimer = 0.12;
     if (this.latching) this.set(1 - this.value, true);

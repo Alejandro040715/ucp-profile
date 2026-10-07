@@ -20,6 +20,7 @@ const page = await browser.newPage({ viewport: { width, height } });
 const logs = [];
 page.on('console', (m) => logs.push(`[${m.type()}] ${m.text()}`));
 page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}\n${e.stack}`));
+page.on('response', (r) => { if (r.status() >= 400) logs.push(`[http ${r.status()}] ${r.url()}`); });
 const url = `http://127.0.0.1:${PORT}/${process.env.QS ?? '?q=LOW&fly'}`;
 await page.goto(url, { waitUntil: 'commit', timeout: 120000 });
 const tLoad = Date.now();

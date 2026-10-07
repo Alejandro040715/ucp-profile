@@ -281,7 +281,7 @@ export class PlayerAircraft {
     const gearLights = ph.gear.legs.map((l) => (l.broken ? 2 : l.extension >= 1 ? 1 : l.extension > 0 ? 2 : 0));
     this.cockpit.update(dt, {
       stickPitch: ph.controls.pitch, stickRoll: ph.controls.roll, pedals: ph.controls.yaw,
-      throttle: ph.controls.throttle, afterburner: ph.controls.afterburner, headYaw: 0, headPitch: 0, gearLights,
+      throttle: ph.controls.throttle, afterburner: ph.controls.afterburner, headYaw: 0, headPitch: 0, gearLights, ac: ph,
     }, ess, main);
     this.cockpit.setFirstPerson(cameraInCockpit);
     // landing light

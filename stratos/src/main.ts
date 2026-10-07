@@ -1,6 +1,7 @@
 import './ui/base.css';
 import { Game } from './core/Game.ts';
 import { preloadTextures } from './assets/TextureLibrary.ts';
+import { preloadF16Cockpit } from './cockpit/F16Cockpit.ts';
 
 const canvas = document.getElementById('viewport') as HTMLCanvasElement;
 const ui = document.getElementById('ui') as HTMLElement;
@@ -21,9 +22,21 @@ function start(): void {
 
 // real textures first (progress on the boot screen), then the synchronous
 // asset generation once the boot screen has painted
-preloadTextures((done, total) => {
-  if (status) status.textContent = `LOADING TEXTURES ${done}/${total}…`;
-}).then(() => {
+let texDone = 0, texTotal = 0, pitFrac = 0;
+const progress = () => {
+  if (status) status.textContent = `LOADING TEXTURES ${texDone}/${texTotal} · COCKPIT ${Math.round(pitFrac * 100)}%…`;
+};
+Promise.all([
+  preloadTextures((done, total) => {
+    texDone = done;
+    texTotal = total;
+    progress();
+  }),
+  preloadF16Cockpit((f) => {
+    pitFrac = f;
+    progress();
+  }),
+]).then(() => {
   if (status) status.textContent = 'PREPARING AIRFRAME, TEXTURES AND TERRAIN…';
   requestAnimationFrame(() => setTimeout(start, 30));
 });

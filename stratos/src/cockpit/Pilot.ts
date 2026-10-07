@@ -148,6 +148,9 @@ export function solveTwoBone(root: Vector3, target: Vector3, l1: number, l2: num
   return out.copy(root).addScaledVector(dir, a).addScaledVector(bend, h);
 }
 
+/** hip point of the modelled posture (between the hip joints) */
+const HIP0 = new Vector3(0, 0.28, -4.12);
+
 export class Pilot {
   readonly root = new Group();
   readonly head = new Group();
@@ -181,6 +184,10 @@ export class Pilot {
   readonly hipR = new Vector3(0.1, 0.28, -4.12);
   private torso: Mesh;
   private vest: Mesh;
+  /** upper body (torso, harness, head) pivots about the hip point to sit in different seats */
+  private body = new Group();
+  private inner = new Group();
+  private bodyM = new Matrix4();
 
   constructor() {
     if (!this.realFabric) {
@@ -207,29 +214,29 @@ export class Pilot {
     this.torso.position.set(0, 0.47, -4.0);
     this.torso.rotation.x = -0.12;
     this.torso.scale.set(1.08, 1, 0.72);
-    this.root.add(this.torso);
+    this.inner.add(this.torso);
     this.vest = new Mesh(new CapsuleGeometry(0.16, 0.2, 6, 12), libTexture('canvas', 'normal') ? gear(0x5f5c40, 0.9, 'vest', fabric('canvas', 0.07, 0.45)) : mat(0x5d5a3c, 0.85));
     this.vest.position.set(0, 0.55, -4.06);
     this.vest.scale.set(1.12, 1, 0.55);
-    this.root.add(this.vest);
+    this.inner.add(this.vest);
     for (const s of [-1, 1]) {
       const strap = new Mesh(new BoxGeometry(0.045, 0.5, 0.02), this.harness);
       strap.position.set(s * 0.08, 0.5, -4.13);
       strap.rotation.z = s * 0.12;
       strap.rotation.x = -0.12;
-      this.root.add(strap);
+      this.inner.add(strap);
       const buckle = new Mesh(new BoxGeometry(0.05, 0.04, 0.015), mat(0x9aa0a6, 0.3, 0.9));
       buckle.position.set(s * 0.07, 0.38, -4.15);
-      this.root.add(buckle);
+      this.inner.add(buckle);
     }
     const lap = new Mesh(new BoxGeometry(0.34, 0.05, 0.02), this.harness);
     lap.position.set(0, 0.3, -4.16);
-    this.root.add(lap);
+    this.inner.add(lap);
     // pelvis / seat contact
     const pelvis = new Mesh(new CapsuleGeometry(0.14, 0.12, 4, 10), this.suit);
     pelvis.rotation.z = Math.PI / 2;
     pelvis.position.set(0, 0.27, -4.06);
-    this.root.add(pelvis);
+    this.inner.add(pelvis);
     // helmet head (hidden in first person)
     this.head.position.set(0, 0.92, -4.07);
     const helmet = new Mesh(new SphereGeometry(0.135, 24, 18), mat(0x6e7378, 0.38, 0.1));
@@ -251,7 +258,10 @@ export class Pilot {
     hose.rotation.z = 0.5;
     hose.rotation.x = 0.4;
     this.head.add(hose);
-    this.root.add(this.head);
+    this.inner.add(this.head);
+    this.body.add(this.inner);
+    this.root.add(this.body);
+    this.seat(HIP0, 0);
     // limbs
     this.upperArmL = new Bone(0.05, 0.28, this.suit, this.root);
     this.lowerArmL = new Bone(0.043, 0.27, this.suit, this.root);
@@ -285,7 +295,7 @@ export class Pilot {
     const gHose = new Mesh(new CylinderGeometry(0.012, 0.012, 0.22, 8), mat(0x22231f, 0.75));
     gHose.position.set(-0.17, 0.27, -4.05);
     gHose.rotation.set(0.3, 0, 1.2);
-    this.root.add(gHose);
+    this.inner.add(gHose);
     const handGeo = new SphereGeometry(0.045, 12, 8);
     this.handL = new Mesh(handGeo, this.glove);
     this.handL.scale.set(0.85, 1.2, 1.05);
@@ -305,30 +315,51 @@ export class Pilot {
   }
 
   private tmpE = new Vector3();
+  private sL = new Vector3();
+  private sR = new Vector3();
+  private hL = new Vector3();
+  private hR = new Vector3();
+
+  /**
+   * Seats the pilot: the hip point moves to `hip` and the upper body reclines
+   * by `recline` radians (positive leans the back aft) about it.
+   */
+  seat(hip: Vector3, recline: number): void {
+    this.body.position.copy(hip);
+    this.body.rotation.set(recline, 0, 0);
+    this.inner.position.copy(HIP0).negate();
+    this.body.updateMatrix();
+    this.inner.updateMatrix();
+    this.bodyM.multiplyMatrices(this.body.matrix, this.inner.matrix);
+  }
 
   /** Pose the limbs. Targets are body-frame positions. */
   pose(handL: Vector3, handR: Vector3, footL: Vector3, footR: Vector3, headYaw: number, headPitch: number): void {
     const e = this.tmpE;
-    solveTwoBone(this.shoulderL, handL, 0.3, 0.29, new Vector3(-0.6, 0.1, -3.8), e);
-    this.upperArmL.set(this.shoulderL, e, 0.05);
+    const sL = this.sL.copy(this.shoulderL).applyMatrix4(this.bodyM);
+    const sR = this.sR.copy(this.shoulderR).applyMatrix4(this.bodyM);
+    const hipL = this.hL.copy(this.hipL).applyMatrix4(this.bodyM);
+    const hipR = this.hR.copy(this.hipR).applyMatrix4(this.bodyM);
+    solveTwoBone(sL, handL, 0.3, 0.29, new Vector3(-0.6, 0.1, -3.8), e);
+    this.upperArmL.set(sL, e, 0.05);
     this.lowerArmL.set(e, handL, 0.043);
-    solveTwoBone(this.shoulderR, handR, 0.3, 0.29, new Vector3(0.6, 0.1, -3.8), e);
-    this.upperArmR.set(this.shoulderR, e, 0.05);
+    solveTwoBone(sR, handR, 0.3, 0.29, new Vector3(0.6, 0.1, -3.8), e);
+    this.upperArmR.set(sR, e, 0.05);
     this.lowerArmR.set(e, handR, 0.043);
     this.handL.position.copy(handL);
     this.handR.position.copy(handR);
-    solveTwoBone(this.hipL, footL, 0.46, 0.45, new Vector3(-0.2, 1.2, -4.8), e);
-    this.thighL.set(this.hipL, e, 0.075);
+    solveTwoBone(hipL, footL, 0.46, 0.45, new Vector3(-0.45, 1.2, -4.8), e);
+    this.thighL.set(hipL, e, 0.075);
     this.shinL.set(e, footL, 0.058);
-    solveTwoBone(this.hipR, footR, 0.46, 0.45, new Vector3(0.2, 1.2, -4.8), e);
-    this.thighR.set(this.hipR, e, 0.075);
+    solveTwoBone(hipR, footR, 0.46, 0.45, new Vector3(0.45, 1.2, -4.8), e);
+    this.thighR.set(hipR, e, 0.075);
     this.shinR.set(e, footR, 0.058);
     // kneeboard rides on top of the right thigh, long side along the femur
     {
-      const along = _a.subVectors(e, this.hipR).normalize();
+      const along = _a.subVectors(e, hipR).normalize();
       const side = _b.crossVectors(along, UP).normalize();
       const top = _c.crossVectors(side, along).normalize();
-      this.kneeboard.position.copy(this.hipR).lerp(e, 0.62).addScaledVector(top, 0.078);
+      this.kneeboard.position.copy(hipR).lerp(e, 0.62).addScaledVector(top, 0.078);
       _m.makeBasis(side, top, _d.copy(along).negate());
       this.kneeboard.quaternion.setFromRotationMatrix(_m);
     }

@@ -141,3 +141,17 @@ tests         física en Node + capturas con Chromium headless (tests/shots/*.js
 - Aterrizaje completo, aterrizaje duro que daña el tren sin destruir el avión, y planeo tras apagado por falta de combustible.
 
 `node tests/shot.mjs 0 tests/shots/exterior.js` (y el resto de guiones) captura vistas en Chromium headless a `tests/output/`.
+
+## Cabina F-16 (FlightGear, GPL)
+
+La cabina 3D es la del F-16 de FlightGear (Block 50), convertida a
+`public/models/f16-cockpit.glb` con `scripts/f16/convert.py` (lee el árbol
+XML + AC3D, evalúa las animaciones `select` para una configuración fija y
+exporta las animaciones de agujas, interruptores, palanca, gases y pedales).
+`src/cockpit/F16Cockpit.ts` reproduce esas animaciones con la simulación;
+los controles interactivos, el HUD y los MFD se colocan sobre las piezas
+reales. Por incluir ese modelo, el proyecto se distribuye bajo **GPL-2.0 o
+posterior** (`LICENSE`); créditos en `public/models/F16-COCKPIT-CREDITS.md`.
+
+Regenerar: `python3 scripts/f16/fetch.py` (descarga el modelo) y
+`python3 scripts/f16/convert.py <dir> Models/Cockpit/Main/cockpit.xml <out> "Pilot_ext,Pilot_int" "" scripts/f16/dyn.json`.

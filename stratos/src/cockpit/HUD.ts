@@ -87,6 +87,20 @@ export class HUD {
     plate.rotation.x = -0.62;
     plate.renderOrder = 12;
     this.group.add(plate);
+    this.plate = plate;
+  }
+
+  private plate: Mesh;
+
+  /** Moves the combiner glass onto another cockpit's combiner (bbox + normal, body frame). */
+  fitCombiner(a: { min: number[]; max: number[]; n: number[] }): void {
+    const n = new Vector3(a.n[0], a.n[1], a.n[2]).normalize();
+    const w = a.max[0] - a.min[0];
+    const h = Math.hypot(a.max[1] - a.min[1], a.max[2] - a.min[2]);
+    this.plate.geometry.dispose();
+    this.plate.geometry = new PlaneGeometry(w, h);
+    this.plate.position.set((a.min[0] + a.max[0]) / 2, (a.min[1] + a.max[1]) / 2, (a.min[2] + a.max[2]) / 2).addScaledVector(n, 0.001);
+    this.plate.rotation.set(-Math.atan2(n.y, n.z), 0, 0);
   }
 
   update(ctx: HudContext, bodyQuat: Quaternion, powered: boolean): void {

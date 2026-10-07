@@ -20,6 +20,8 @@ import { clamp, damp } from '../core/math.ts';
 import { mergeStatic } from '../render/mergeStatic.ts';
 import { surfaceDetailHook, surfaceDetailKey, type SurfaceDetailOptions } from '../render/SurfaceDetail.ts';
 import { libTexture } from '../assets/TextureLibrary.ts';
+import { F16Cockpit, f16PanelLight, hasF16Cockpit, type F16Anchor } from './F16Cockpit.ts';
+import type { AircraftPhysics } from '../aircraft/AircraftPhysics.ts';
 
 // FS 36231-like dark gull grey: reads as grey in daylight, never pure black
 const PAINT = 0x474c51;
@@ -92,6 +94,92 @@ function leatherNormal(): CanvasTexture {
   return leatherTex;
 }
 
+/** F-16 part that carries each functional control (sub-model/object name). */
+const F16_CONTROL_ANCHOR: Record<string, string> = {
+  gear: 'LeftAuxConsole/gear_lever',
+  flaps: 'LeftConsole/SW_ALT_FLAPS_50',
+  fireExt: 'LeftConsole/FIRE_OHEAT_DETECT',
+  airbrake: 'Throttle/speed_brake',
+  fcsMode: 'LeftConsole/SW_DBU',
+  masterCaution: 'EYEBROW_LEFT/master_reset',
+  masterWarn: 'EYEBROW_LEFT/f-ack',
+  battery: 'LeftConsole/SW_MAIN_POWER',
+  generator: 'LeftConsole/SW_EPU',
+  fuelPump: 'LeftConsole/SW_MASTER_FUEL',
+  engMaster: 'LeftConsole/SW_KNOB_ENG_FEED',
+  engStart: 'LeftConsole/SW_JET_FUEL',
+  fcsReset: 'LeftConsole/SW_FLCS-RESET',
+  trim: 'LeftConsole/pitch-trim-wheel_50',
+  navLights: 'LeftConsole/SW_POS_LIGHTS_50',
+  strobe: 'LeftConsole/SW_ANTI_COLLISION_50',
+  landingLight: 'LeftAuxConsole/light-land-switch',
+  formation: 'LeftConsole/SW_KNOB_EXT_FORM_LIGHT_50',
+  antiColl: 'LeftConsole/SW_WING-TAIL_50',
+  instLights: 'RightConsole/inst-pnl-primary-knob',
+  consoleLights: 'RightConsole/console-primary-knob',
+  floodLights: 'RightConsole/inst-pnl-flood-knob',
+  hudBrt: 'ICP/sym',
+  mfdBrt: 'RightConsole/data-entry-display-knob',
+  hudMode: 'RightConsole/att_fpm-switch',
+  parkBrake: 'LeftAuxConsole/SW_PARKING_BRAKE',
+  nws: 'LeftAuxConsole/SW_BRAKES_CHAN',
+  oxygen: 'RightConsole/EM-NO-TE',
+};
+// MFD option-select buttons: top row = pages, bottom = NEXT / FUEL, sides = OSBs
+for (const [side, sub] of [['L', 'MFD1'], ['R', 'MFD2']] as const) {
+  MFD_PAGES.slice(0, 5).forEach((page, i) => (F16_CONTROL_ANCHOR[`mfd${side}_${page}`] = `${sub}/MFDButtonT${i + 1}`));
+  F16_CONTROL_ANCHOR[`mfd${side}_NEXT`] = `${sub}/MFDButtonB1`;
+  F16_CONTROL_ANCHOR[`mfd${side}_FUEL`] = `${sub}/MFDButtonB5`;
+  for (let k = 0; k < 4; k++) {
+    F16_CONTROL_ANCHOR[`mfd${side}_os${k}-1`] = `${sub}/MFDButtonL${5 - k}`;
+    F16_CONTROL_ANCHOR[`mfd${side}_os${k}1`] = `${sub}/MFDButtonR${5 - k}`;
+  }
+}
+
+/**
+ * Value of a FlightGear switch property for one of our controls (the F-16
+ * switch animations expect FlightGear's property ranges).
+ */
+function f16SwitchProp(id: string, c: CockpitControl): number {
+  const v = c.value;
+  switch (id) {
+    case 'battery':
+      return v ? 2 : 0; // MAIN PWR: OFF / BATT / MAIN
+    case 'flaps':
+      return v > 0 ? 1 : 0;
+    case 'landingLight':
+      return v === 0 ? 0 : v === 1 ? -1 : 1; // LANDING / OFF / TAXI
+    case 'oxygen':
+      return v === 3 ? -1 : 0;
+    case 'instLights':
+    case 'consoleLights':
+    case 'floodLights':
+    case 'mfdBrt':
+    case 'hudBrt':
+    case 'formation':
+      return v / Math.max(1, c.positions - 1);
+    case 'engStart':
+    case 'fireExt':
+      return c instanceof PushButton ? (c.pressing ? 1 : 0) : v;
+    default:
+      return v;
+  }
+}
+
+const F16_GREEN = new Color(0.1, 1.0, 0.2);
+const F16_RED = new Color(1.0, 0.08, 0.04);
+const F16_AMBER = new Color(1.0, 0.55, 0.05);
+
+/** Fits a unit-size plane mesh onto an F-16 glass quad (anchor bbox + normal). */
+function fitQuad(mesh: Object3D, a: F16Anchor, size: number, lift: number): void {
+  const n = new Vector3(...a.n).normalize();
+  const w = a.max[0] - a.min[0];
+  const h = Math.hypot(a.max[1] - a.min[1], a.max[2] - a.min[2]);
+  F16Cockpit.centre(a, mesh.position).addScaledVector(n, lift);
+  mesh.rotation.set(-Math.atan2(n.y, n.z), 0, 0);
+  mesh.scale.set(w / size, h / size, 1);
+}
+
 interface PanelSpec {
   id: string;
   pos: [number, number, number];
@@ -111,11 +199,16 @@ export interface CockpitAnimState {
   headYaw: number;
   headPitch: number;
   gearLights: number[]; // per leg: 0 off, 1 green, 2 red (transit)
+  /** live simulation for the F-16 cockpit gauges */
+  ac?: AircraftPhysics;
 }
 
 export class Cockpit {
   readonly root = new Group();
   private staticRoot = new Group();
+  /** real F-16 cockpit (FlightGear model) when its GLB is available */
+  readonly f16: F16Cockpit | null;
+  private panels: Group[] = [];
   readonly controls = new Map<string, CockpitControl>();
   readonly mfdL: MFD;
   readonly mfdR: MFD;
@@ -144,10 +237,13 @@ export class Cockpit {
   constructor(skyLut: Texture) {
     this.mfdL = new MFD('ENGINE', 0.165, skyLut);
     this.mfdR = new MFD('FLIGHT', 0.165, skyLut);
-    this.buildStructure();
+    this.f16 = hasF16Cockpit() ? new F16Cockpit() : null;
+    if (!this.f16) this.buildStructure();
     this.buildPanels();
-    this.buildSeat();
-    this.buildStickThrottlePedals();
+    if (!this.f16) {
+      this.buildSeat();
+      this.buildStickThrottlePedals();
+    }
     this.root.add(this.pilot.root);
     this.root.add(this.hud.group);
     // interior lights
@@ -159,7 +255,8 @@ export class Cockpit {
     this.root.add(this.consoleFlood);
     this.standbyMat = m(0xffffff, 0.3, 0, { map: this.standby.texture, emissiveMap: this.standby.texture, emissive: new Color(0.25, 0.25, 0.25) });
     this.annunMat = m(0xffffff, 0.3, 0, { map: this.annun.texture, emissiveMap: this.annun.emissiveTexture, emissive: new Color(1, 1, 1) });
-    this.placeInstruments();
+    if (this.f16) this.mountOnF16(this.f16);
+    else this.placeInstruments();
     this.root.add(this.staticRoot);
     this.root.traverse((o) => {
       if ((o as Mesh).isMesh && !(o.userData.noShadow)) {
@@ -351,6 +448,7 @@ export class Cockpit {
     face.position.z = -0.004;
     g.add(face);
     this.root.add(g);
+    this.panels.push(g);
     return g;
   }
 
@@ -539,6 +637,62 @@ export class Cockpit {
     this.addControl(rc, new ToggleSwitch('parkBrake', 'PARKING BRAKE', 2, 1, ['OFF', 'SET']), 0.0, -0.3);
     this.addControl(rc, new ToggleSwitch('nws', 'NOSE WHEEL STEERING', 2, 1, ['OFF', 'ON']), 0.07, -0.3);
     this.addControl(rc, new RotaryKnob('oxygen', 'OXYGEN REGULATOR', 4, 1, ['OFF', 'NORM', '100%', 'EMER']), -0.04, -0.42);
+  }
+
+  /**
+   * Real F-16 cockpit: the modelled panels replace our panel faces, seat,
+   * stick, throttle and pedals. Every functional control keeps its logic and
+   * hit volume but moves onto the F-16 switch that now represents it (whose
+   * own FlightGear animation shows its position); the HUD combiner and the
+   * MFD screens are fitted onto the F-16 glass.
+   */
+  private mountOnF16(f: F16Cockpit): void {
+    this.root.add(f.root);
+    for (const p of this.panels) p.removeFromParent();
+    const hitOnly = (c: CockpitControl, a: F16Anchor, pad = 0.008) => {
+      c.root.removeFromParent();
+      this.root.add(c.root);
+      F16Cockpit.centre(a, c.root.position);
+      c.root.rotation.set(0, 0, 0);
+      for (const ch of c.root.children) if (ch !== c.hit) ch.visible = false;
+      const g = c.hit.geometry;
+      g.computeBoundingBox();
+      const gs = g.boundingBox!.getSize(new Vector3());
+      c.hit.scale.set(
+        Math.max(a.max[0] - a.min[0] + pad, 0.02) / gs.x,
+        Math.max(a.max[1] - a.min[1] + pad, 0.02) / gs.y,
+        Math.max(a.max[2] - a.min[2] + pad, 0.02) / gs.z,
+      );
+    };
+    for (const [id, c] of this.controls) {
+      const a = F16_CONTROL_ANCHOR[id] ? f.anchor(F16_CONTROL_ANCHOR[id]) : undefined;
+      if (a) hitOnly(c, a);
+      else if (id !== 'canopy') {
+        // no counterpart in the F-16 cockpit: keep it out of the way
+        c.root.removeFromParent();
+      }
+    }
+    // canopy switch: the F-16 has it on the right sidewall aft of the console
+    const canopy = this.controls.get('canopy');
+    if (canopy) {
+      canopy.root.removeFromParent();
+      this.root.add(canopy.root);
+      canopy.root.position.set(0.47, 0.36, -3.86);
+      canopy.root.rotation.set(0, -Math.PI / 2, 0, 'YXZ');
+    }
+    // MFD screens on the F-16 MFD glass (canvas resolution unchanged)
+    for (const [mfd, name] of [[this.mfdL, 'MFD1/MFDimage1'], [this.mfdR, 'MFD2/MFDimage2']] as const) {
+      const a = f.anchor(name);
+      if (!a) continue;
+      mfd.mesh.removeFromParent();
+      this.root.add(mfd.mesh);
+      fitQuad(mfd.mesh, a, 0.165, 0.0006);
+    }
+    const hud = f.anchor('HUDImage2');
+    if (hud) this.hud.fitCombiner(hud);
+    // ACES II: hip point on the seat pan, back reclined ~30 degrees
+    const seat = f.anchor('chair/seat-cushion');
+    this.pilot.seat(new Vector3(0, (seat ? seat.max[1] : 0.34) + 0.055, -4.33), 0.42);
   }
 
   private placeInstruments(): void {
@@ -732,6 +886,10 @@ export class Cockpit {
   update(dt: number, s: CockpitAnimState, essential: boolean, mainBus: boolean): void {
     this.time += dt;
     for (const c of this.controls.values()) c.update(dt, this.time);
+    if (this.f16) {
+      this.updateF16(dt, this.f16, s, essential);
+      return;
+    }
     // stick / throttle / pedal animation (smoothed like real linkages)
     this.stickPivot.rotation.x = damp(this.stickPivot.rotation.x, -s.stickPitch * 0.24, 25, dt);
     this.stickPivot.rotation.z = damp(this.stickPivot.rotation.z, -s.stickRoll * 0.22, 25, dt);
@@ -762,6 +920,100 @@ export class Cockpit {
       else lm.emissive.setRGB(1.8, 0.1, 0.05);
     });
     void mainBus;
+  }
+
+  // smoothed linkage positions for the F-16 controls
+  private sm = { pitch: 0, roll: 0, yaw: 0, throttle: 0, trim: 0 };
+  private elapsed = 0;
+
+  private updateF16(dt: number, f: F16Cockpit, s: CockpitAnimState, essential: boolean): void {
+    const sm = this.sm;
+    sm.pitch = damp(sm.pitch, s.stickPitch, 25, dt);
+    sm.roll = damp(sm.roll, s.stickRoll, 25, dt);
+    sm.yaw = damp(sm.yaw, s.pedals, 18, dt);
+    // throttle quadrant: OFF/IDLE ... MIL at 80 % of the travel, AB beyond
+    sm.throttle = damp(sm.throttle, s.afterburner ? 1 : clamp(s.throttle, 0, 1) * 0.8, 12, dt);
+    this.elapsed += dt;
+    const ac = s.ac;
+    const t = ac?.t;
+    const e = ac?.engine;
+    const now = new Date();
+    const clockSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds() + now.getMilliseconds() / 1000;
+    const fuelLbs = ac ? ac.fuel.total * 2.20462 : 0;
+    const ffPph = e ? e.fuelFlow * 2.20462 * 3600 : 0;
+    const hyd = e && e.running ? 3000 * clamp(e.rpmPercent / 60, 0, 1) : 0;
+    const DEG_ = 180 / Math.PI;
+    f.update((name, key) => {
+      if (key.startsWith('sw:') || key === 'gearKnobLight') {
+        const id = key === 'gearKnobLight' ? 'gear' : key === 'sw:fuelPumpCover' ? 'fuelPump' : key.slice(3);
+        if (id === 'trim') return ac ? ac.fcs.trim * 2 : 0;
+        const c = this.controls.get(id);
+        return c ? f16SwitchProp(id, c) : 0;
+      }
+      switch (name) {
+        case 'controls/flight/elevator': return -sm.pitch;
+        case 'controls/flight/aileron': return sm.roll;
+        case 'controls/flight/rudder': return sm.yaw;
+        case 'controls/gear/brake-left': return ac ? ac.controls.brakeLeft : 0;
+        case 'controls/gear/brake-right': return ac ? ac.controls.brakeRight : 0;
+        case 'controls/engines/engine/throttle-movement': return sm.throttle;
+        case 'orientation/pitch-deg':
+        case 'instrumentation/attitude-indicator[2]/indicated-pitch-deg': return t ? t.pitch * DEG_ : 0;
+        case 'orientation/roll-deg':
+        case 'instrumentation/attitude-indicator[2]/indicated-roll-deg': return t ? t.bank * DEG_ : 0;
+        case 'orientation/heading-magnetic-deg':
+        case 'instrumentation/magnetic-compass/indicated-heading-deg': return t ? t.heading : 0;
+        case 'instrumentation/airspeed-indicator/indicated-speed-kt': return t ? t.ias / 0.5144 : 0;
+        case 'velocities/mach': return t ? t.mach : 0;
+        case 'instrumentation/altimeter/indicated-altitude-ft': return t ? t.altitude * 3.28084 : 0;
+        case 'f16/avionics/vvi-indicated-speed-fps': return t ? t.verticalSpeed * 3.28084 : 0;
+        case 'fdm/jsbsim/fcs/fly-by-wire/pitch/alpha-indicated': return t ? t.alpha * DEG_ : 0;
+        case 'instrumentation/slip-skid-ball/indicated-slip-skid': return t ? clamp(-t.ny * 6, -1.5, 1.5) : 0;
+        case 'instrumentation/turn-indicator/indicated-turn-rate': return t ? clamp(t.turnRate / 3, -1.6, 1.6) : 0;
+        case 'instrumentation/clock/indicated-sec': return clockSec;
+        case 'instrumentation/clock/elapsed-sec': return this.elapsed;
+        case 'engines/engine[0]/n2': return e ? e.rpmPercent : 0;
+        case 'engines/engine[0]/ftit-degc': return e ? e.egt : 0;
+        case 'engines/engine[0]/nozzle-pos-norm-lag': return e ? e.nozzle : 0;
+        case 'engines/engine[0]/oil-pressure-psi': return e ? e.oilPressure * 60 : 0;
+        case 'fdm/jsbsim/systems/hydraulics/sysa-psi':
+        case 'fdm/jsbsim/systems/hydraulics/sysb-psi': return hyd;
+        case 'f16/fuel/hand-aft-lag': return fuelLbs * 0.45;
+        case 'f16/fuel/hand-fwd-lag': return fuelLbs * 0.3;
+        case 'consumables/fuel/total-fuel-lbs-1': return fuelLbs % 10;
+        case 'consumables/fuel/total-fuel-lbs-10': return fuelLbs % 100;
+        case 'consumables/fuel/total-fuel-lbs-100': return fuelLbs % 1000;
+        case 'consumables/fuel/total-fuel-lbs-1000': return fuelLbs % 10000;
+        case 'consumables/fuel/total-fuel-lbs-10000': return fuelLbs % 100000;
+        case 'f16/cockpit/fuel-flow-digit-3': return Math.floor(ffPph / 100) % 10;
+        case 'f16/cockpit/fuel-flow-digit-4': return Math.floor(ffPph / 1000) % 10;
+        case 'f16/cockpit/fuel-flow-digit-5': return Math.floor(ffPph / 10000) % 10;
+        case 'f16/cockpit/oxygen-liters-output': return 4.6;
+        case 'surface-positions/speedbrake-pos-anim-lag': return ac ? clamp(ac.surfaces.airbrake / 1.0, 0, 1) : 0;
+        default: return 0;
+      }
+    });
+    // hands on the real grips, feet on the pedals (positions follow the parts)
+    const grip = (key: string, p: Vector3) => {
+      const m = f.partMatrix(key);
+      return m ? p.applyMatrix4(m) : p;
+    };
+    const handR = grip('stick', new Vector3(0.292, 0.385, -4.515));
+    const handL = grip('throttle', new Vector3(-0.415, 0.385, -4.385));
+    const footL = grip('pedalL', new Vector3(-0.135, 0.3, -5.09));
+    const footR = grip('pedalR', new Vector3(0.135, 0.3, -5.09));
+    this.pilot.pose(handL, handR, footL, footR, s.headYaw, s.headPitch);
+    // lamps
+    const green = F16_GREEN, red = F16_RED;
+    s.gearLights.forEach((v, i) => f.setLamp('gearlt' + i, !essential || v === 0 ? null : v === 1 ? green : red, 1.6));
+    f.setLamp('gearKnobLight', essential && s.gearLights.some((v) => v === 2) ? red : null, 2);
+    const mc = this.controls.get('masterCaution') as PushButton | undefined;
+    const mw = this.controls.get('masterWarn') as PushButton | undefined;
+    f.setLamp('sw:masterCaution', mc && mc.lit ? F16_AMBER : null, 1.4);
+    f.setLamp('sw:masterWarn', mw && mw.lit ? red : null, 1.4);
+    this.flood.intensity = essential ? this.floodLevel * 0.9 : 0;
+    this.consoleFlood.intensity = essential ? this.consoleLevel * 0.35 : 0;
+    f16PanelLight.value = essential ? this.instLights * 0.35 : 0;
   }
 
   setFirstPerson(fp: boolean): void {
