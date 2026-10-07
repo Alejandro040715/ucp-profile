@@ -7,6 +7,8 @@ import {
   CanvasTexture, RepeatWrapping, SRGBColorSpace, Vector2, Quaternion, Matrix4,
 } from 'three';
 import { worldMaterial } from '../render/Materials.ts';
+import { surfaceDetailHook, surfaceDetailKey, type SurfaceDetailOptions } from '../render/SurfaceDetail.ts';
+import { libTexture } from '../assets/TextureLibrary.ts';
 
 const UP = new Vector3(0, 1, 0);
 const _a = new Vector3();
@@ -18,6 +20,23 @@ const _m = new Matrix4();
 function mat(color: number, rough: number, metal = 0): MeshStandardMaterial {
   return worldMaterial(new MeshStandardMaterial({ color, roughness: rough, metalness: metal }), { key: 'pilot' });
 }
+
+/** pilot gear material with a scanned CC0 fabric/leather/rubber surface */
+function gear(color: number, rough: number, name: string, d: SurfaceDetailOptions, metal = 0): MeshStandardMaterial {
+  return worldMaterial(new MeshStandardMaterial({ color, roughness: rough, metalness: metal }), { key: `pilot-${name}-` + surfaceDetailKey(d), hooks: [surfaceDetailHook(d)] });
+}
+const fabric = (slug: string, tile: number, albedoAmount = 0.4): SurfaceDetailOptions => ({
+  normal: libTexture(slug, 'normal'),
+  normalTile: tile,
+  normalStrength: 0.9,
+  rough: libTexture(slug, 'roughness'),
+  roughTile: tile,
+  roughLo: 0.92,
+  roughHi: 1.06,
+  albedo: libTexture(slug, 'albedo'),
+  albedoTile: tile,
+  albedoAmount,
+});
 
 /** Nomex twill: diagonal weave normal map + faint colour mottling (tiling). */
 function twill(): { normal: CanvasTexture; color: CanvasTexture } {
@@ -132,11 +151,18 @@ export function solveTwoBone(root: Vector3, target: Vector3, l1: number, l2: num
 export class Pilot {
   readonly root = new Group();
   readonly head = new Group();
-  private suit = mat(0x5a5f4a, 0.92);
-  private harness = mat(0x23262a, 0.7);
-  private glove = mat(0x55553f, 0.8);
+  // sage-green Nomex coverall, khaki anti-G suit, olive webbing harness
+  private realFabric = !!libTexture('twill', 'normal');
+  private suit = this.realFabric ? gear(0x6a7056, 0.92, 'twill', fabric('twill', 0.05, 0.35)) : mat(0x5a5f4a, 0.92);
+  private gsuit = libTexture('canvas', 'normal') ? gear(0x707052, 0.95, 'canvas', fabric('canvas', 0.06, 0.4)) : mat(0x66664a, 0.95);
+  private harness = libTexture('webbing', 'normal') ? gear(0x34362c, 0.85, 'webbing', fabric('webbing', 0.04, 0.45)) : mat(0x23262a, 0.7);
+  private glove = libTexture('leather', 'normal')
+    ? gear(0x3f3a2e, 0.75, 'glove', { normal: libTexture('leather', 'normal'), normalTile: 0.06, normalStrength: 0.7, rough: libTexture('leather', 'roughness'), roughTile: 0.06, roughLo: 0.85, roughHi: 1.1 })
+    : mat(0x55553f, 0.8);
   private kneeboard: Group;
-  private boot = mat(0x141414, 0.55);
+  private boot = libTexture('leather', 'normal')
+    ? gear(0x141414, 0.5, 'boot', { normal: libTexture('leather', 'normal'), normalTile: 0.1, normalStrength: 0.8, rough: libTexture('leather', 'roughness'), roughTile: 0.1, roughLo: 0.8, roughHi: 1.2 })
+    : mat(0x141414, 0.55);
   private upperArmL: Bone;
   private lowerArmL: Bone;
   private upperArmR: Bone;
@@ -157,11 +183,14 @@ export class Pilot {
   private vest: Mesh;
 
   constructor() {
-    const weave = twill();
-    for (const m of [this.suit, this.glove]) {
-      m.normalMap = weave.normal;
-      m.normalScale = new Vector2(0.45, 0.45);
-      m.map = weave.color;
+    if (!this.realFabric) {
+      // procedural fallback when the scanned fabric is unavailable
+      const weave = twill();
+      for (const m of [this.suit, this.glove]) {
+        m.normalMap = weave.normal;
+        m.normalScale = new Vector2(0.45, 0.45);
+        m.map = weave.color;
+      }
     }
     // kneeboard strapped to the right thigh
     this.kneeboard = new Group();
@@ -179,7 +208,7 @@ export class Pilot {
     this.torso.rotation.x = -0.12;
     this.torso.scale.set(1.08, 1, 0.72);
     this.root.add(this.torso);
-    this.vest = new Mesh(new CapsuleGeometry(0.16, 0.2, 6, 12), mat(0x5d5a3c, 0.85));
+    this.vest = new Mesh(new CapsuleGeometry(0.16, 0.2, 6, 12), libTexture('canvas', 'normal') ? gear(0x5f5c40, 0.9, 'vest', fabric('canvas', 0.07, 0.45)) : mat(0x5d5a3c, 0.85));
     this.vest.position.set(0, 0.55, -4.06);
     this.vest.scale.set(1.12, 1, 0.55);
     this.root.add(this.vest);
@@ -210,7 +239,10 @@ export class Pilot {
     visor.rotation.y = Math.PI;
     visor.scale.set(0.97, 1.05, 1.14);
     this.head.add(visor);
-    const mask = new Mesh(new CapsuleGeometry(0.045, 0.05, 4, 10), mat(0x161718, 0.5));
+    const rubberMask = libTexture('rubber', 'normal')
+      ? gear(0x161718, 0.6, 'mask', { normal: libTexture('rubber', 'normal'), normalTile: 0.05, normalStrength: 0.8, rough: libTexture('rubber', 'roughness'), roughTile: 0.06, roughLo: 0.85, roughHi: 1.1 })
+      : mat(0x161718, 0.5);
+    const mask = new Mesh(new CapsuleGeometry(0.045, 0.05, 4, 10), rubberMask);
     mask.rotation.x = Math.PI / 2;
     mask.position.set(0, -0.07, -0.12);
     this.head.add(mask);
@@ -225,10 +257,35 @@ export class Pilot {
     this.lowerArmL = new Bone(0.043, 0.27, this.suit, this.root);
     this.upperArmR = new Bone(0.05, 0.28, this.suit, this.root);
     this.lowerArmR = new Bone(0.043, 0.27, this.suit, this.root);
-    this.thighL = new Bone(0.075, 0.42, this.suit, this.root);
-    this.shinL = new Bone(0.058, 0.42, this.suit, this.root);
-    this.thighR = new Bone(0.075, 0.42, this.suit, this.root);
-    this.shinR = new Bone(0.058, 0.42, this.suit, this.root);
+    // legs wear the anti-G suit chaps (thigh + calf bladders)
+    this.thighL = new Bone(0.075, 0.42, this.gsuit, this.root);
+    this.shinL = new Bone(0.058, 0.42, this.gsuit, this.root);
+    this.thighR = new Bone(0.075, 0.42, this.gsuit, this.root);
+    this.shinR = new Bone(0.058, 0.42, this.gsuit, this.root);
+    // G-suit details riding on the thigh bones (bone local +y = along the femur):
+    // cargo pocket on the outer thigh, lacing zipper, waist bladder hose
+    for (const [bone, side] of [[this.thighL, -1], [this.thighR, 1]] as const) {
+      const pocket = new Mesh(new BoxGeometry(0.02, 0.15, 0.11), this.gsuit);
+      pocket.position.set(side * 0.072, 0.02, 0);
+      bone.mesh.add(pocket);
+      const flap = new Mesh(new BoxGeometry(0.022, 0.03, 0.115), this.harness);
+      flap.position.set(side * 0.073, 0.09, 0);
+      bone.mesh.add(flap);
+      // lacing zipper on the inner leg (bone local x = body x for these poses)
+      const zip = new Mesh(new BoxGeometry(0.008, 0.36, 0.006), mat(0x2c2d27, 0.5, 0.4));
+      zip.position.set(-side * 0.074, 0, 0);
+      bone.mesh.add(zip);
+    }
+    for (const [bone, side] of [[this.shinL, -1], [this.shinR, 1]] as const) {
+      const zip = new Mesh(new BoxGeometry(0.008, 0.34, 0.006), mat(0x2c2d27, 0.5, 0.4));
+      zip.position.set(-side * 0.057, 0, 0);
+      bone.mesh.add(zip);
+    }
+    // anti-G hose from the waist bladder to the seat connector
+    const gHose = new Mesh(new CylinderGeometry(0.012, 0.012, 0.22, 8), mat(0x22231f, 0.75));
+    gHose.position.set(-0.17, 0.27, -4.05);
+    gHose.rotation.set(0.3, 0, 1.2);
+    this.root.add(gHose);
     const handGeo = new SphereGeometry(0.045, 12, 8);
     this.handL = new Mesh(handGeo, this.glove);
     this.handL.scale.set(0.85, 1.2, 1.05);

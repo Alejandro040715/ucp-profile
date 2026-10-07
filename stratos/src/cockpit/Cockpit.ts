@@ -18,6 +18,8 @@ import { AnnunciatorPanel, StandbyCluster } from './Standby.ts';
 import { Pilot } from './Pilot.ts';
 import { clamp, damp } from '../core/math.ts';
 import { mergeStatic } from '../render/mergeStatic.ts';
+import { surfaceDetailHook, surfaceDetailKey, type SurfaceDetailOptions } from '../render/SurfaceDetail.ts';
+import { libTexture } from '../assets/TextureLibrary.ts';
 
 // FS 36231-like dark gull grey: reads as grey in daylight, never pure black
 const PAINT = 0x474c51;
@@ -27,6 +29,30 @@ function m(color: number, roughness: number, metalness = 0, extra: Partial<MeshS
   Object.assign(mm, extra);
   return ck(mm, 'cpt');
 }
+
+/**
+ * Cockpit material with scanned CC0 surface detail (triplanar, physical
+ * scale). Each detail variant compiles under its own program key.
+ */
+function mt(color: number, roughness: number, metalness: number, name: string, detail: SurfaceDetailOptions, extra: Partial<MeshStandardMaterial> = {}): MeshStandardMaterial {
+  const mm = new MeshStandardMaterial({ color, roughness, metalness });
+  Object.assign(mm, extra);
+  return worldMaterial(mm, { key: `cpt-${name}-` + surfaceDetailKey(detail), hooks: [surfaceDetailHook(detail)] });
+}
+
+/** worn interior paint: chipped micro-relief, hand smudges, faint grime */
+const paintDetail = (): SurfaceDetailOptions => ({
+  normal: libTexture('paint-chips', 'normal'),
+  normalTile: 0.35,
+  normalStrength: 0.35,
+  rough: libTexture('smudge', 'mask'),
+  roughTile: 0.45,
+  roughLo: 0.8,
+  roughHi: 1.2,
+  albedo: libTexture('grime', 'mask'),
+  albedoTile: 0.5,
+  albedoAmount: 0.18,
+});
 
 let leatherTex: CanvasTexture | null = null;
 /** small tiling normal map: pebbled leather / padded vinyl */
@@ -148,9 +174,30 @@ export class Cockpit {
 
   // -------------------------------------------------------------------------
   private buildStructure(): void {
-    const paint = worldMaterial(new MeshStandardMaterial({ color: PAINT, roughness: 0.66, metalness: 0.15 }), { key: 'cptpaint' });
-    const black = m(0x141516, 0.93);
-    const floorMat = m(0x1f2124, 0.85, 0.2);
+    const paint = mt(PAINT, 0.66, 0.15, 'paint', paintDetail());
+    // anti-glare coaming: matte black with a fine rubbery grain
+    const black = mt(0x141516, 0.93, 0, 'antiglare', {
+      normal: libTexture('ram-coating', 'normal'),
+      normalTile: 0.18,
+      normalStrength: 0.7,
+      rough: libTexture('ram-coating', 'roughness'),
+      roughTile: 0.25,
+      roughLo: 0.9,
+      roughHi: 1.08,
+    });
+    // non-skid tread plate floor
+    const floorMat = mt(0x2b2e32, 0.8, 0.35, 'tread', {
+      normal: libTexture('tread-plate', 'normal'),
+      normalTile: 0.22,
+      normalStrength: 1.0,
+      rough: libTexture('tread-plate', 'roughness'),
+      roughTile: 0.22,
+      roughLo: 0.75,
+      roughHi: 1.15,
+      albedo: libTexture('grime', 'mask'),
+      albedoTile: 0.4,
+      albedoAmount: 0.35,
+    });
     const add = (geo: BoxGeometry | RoundedBoxGeometry, mat: MeshStandardMaterial, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0) => {
       const mesh = new Mesh(geo, mat);
       mesh.position.set(x, y, z);
@@ -173,6 +220,49 @@ export class Cockpit {
       loom.rotation.x = Math.PI / 2;
       loom.position.set(s * 0.45, -0.12, -4.2);
       this.staticRoot.add(loom);
+    }
+    // canopy seal strips on the sills (black rubber)
+    const seal = mt(0x0d0d0e, 0.85, 0, 'rubber', {
+      normal: libTexture('rubber', 'normal'),
+      normalTile: 0.08,
+      normalStrength: 0.8,
+      rough: libTexture('rubber', 'roughness'),
+      roughTile: 0.12,
+      roughLo: 0.85,
+      roughHi: 1.1,
+    });
+    for (const s2 of [-1, 1]) add(new BoxGeometry(0.018, 0.012, 2.6), seal, s2 * 0.462, 0.631, -4.22);
+    // canopy jettison handle (yellow / black) on the right sill, forward
+    {
+      const jet = new Group();
+      for (let i = 0; i < 6; i++) {
+        const seg = new Mesh(new BoxGeometry(0.012, 0.016, 0.018), m(i % 2 ? 0x121212 : 0xe2b21e, 0.5));
+        seg.position.z = (i - 2.5) * 0.018;
+        jet.add(seg);
+      }
+      jet.position.set(0.43, 0.6, -4.72);
+      this.staticRoot.add(jet);
+    }
+    // rear-view mirrors on the canopy frame either side of the windscreen
+    {
+      const mirror = new MeshStandardMaterial({ color: 0xffffff, roughness: 0.02, metalness: 1.0 });
+      const mirrorMat = ck(mirror, 'mirror');
+      const housing = m(0x1b1c1e, 0.55, 0.1);
+      for (const s2 of [-1, 1]) {
+        const g = new Group();
+        const body = new Mesh(new RoundedBoxGeometry(0.085, 0.045, 0.016, 2, 0.006), housing);
+        const glassM = new Mesh(new PlaneGeometry(0.077, 0.037), mirrorMat);
+        glassM.position.z = 0.0085;
+        const arm = new Mesh(new CylinderGeometry(0.004, 0.004, 0.05, 6), housing);
+        arm.position.set(s2 * 0.02, -0.03, -0.006);
+        arm.rotation.z = -s2 * 0.5;
+        g.add(body, glassM, arm);
+        // on the canopy sill rails, outboard of the forward view, angled back
+        // towards the eye point so the pilot sees his six
+        g.position.set(s2 * 0.43, 0.705, -4.72);
+        g.rotation.set(0.35, -s2 * 0.75, 0, 'YXZ');
+        this.staticRoot.add(g);
+      }
     }
     // rear bulkhead behind the seat
     add(new BoxGeometry(0.92, 0.95, 0.04), paint, 0, 0.28, -2.92);
@@ -200,7 +290,21 @@ export class Cockpit {
         new Vector3(-0.45, 0.795, -4.87), new Vector3(-0.3, 0.797, -4.8), new Vector3(-0.15, 0.798, -4.768), new Vector3(0, 0.798, -4.76),
         new Vector3(0.15, 0.798, -4.768), new Vector3(0.3, 0.797, -4.8), new Vector3(0.45, 0.795, -4.87),
       ]);
-      this.staticRoot.add(new Mesh(new TubeGeometry(edge, 48, 0.02, 10, false), m(0x1a1b1c, 0.78, 0, { normalMap: leatherNormal(), normalScale: new Vector2(0.5, 0.5) })));
+      const lipMat = libTexture('leather', 'normal')
+        ? mt(0x1c1c1d, 0.72, 0, 'leather', {
+            normal: libTexture('leather', 'normal'),
+            normalTile: 0.12,
+            normalStrength: 0.8,
+            rough: libTexture('leather', 'roughness'),
+            roughTile: 0.12,
+            roughLo: 0.8,
+            roughHi: 1.15,
+            albedo: libTexture('leather', 'albedo'),
+            albedoTile: 0.12,
+            albedoAmount: 0.5,
+          })
+        : m(0x1a1b1c, 0.78, 0, { normalMap: leatherNormal(), normalScale: new Vector2(0.5, 0.5) });
+      this.staticRoot.add(new Mesh(new TubeGeometry(edge, 48, 0.02, 10, false), lipMat));
     }
     // HUD projector body on the glareshield
     add(new RoundedBoxGeometry(0.26, 0.07, 0.22, 2, 0.015), m(0x161719, 0.55, 0.3), 0, 0.825, -4.97);
@@ -229,7 +333,19 @@ export class Cockpit {
     g.position.set(...spec.pos);
     g.rotation.set(spec.rot[0], spec.rot[1], spec.rot[2], 'YXZ');
     const art = paintPanel(spec.size[0], spec.size[1], spec.labels, { borders: spec.borders, extra: spec.extra });
-    const mat = ck(new MeshStandardMaterial({ map: art.map, emissiveMap: art.emissiveMap, emissive: new Color(0.55, 0.8, 0.6), emissiveIntensity: 0, roughness: 0.62, metalness: 0.1 }), 'panel');
+    const faceDetail: SurfaceDetailOptions = {
+      normal: libTexture('paint-grain', 'normal'),
+      normalTile: 0.2,
+      normalStrength: 0.35,
+      rough: libTexture('smudge', 'mask'),
+      roughTile: 0.3,
+      roughLo: 0.8,
+      roughHi: 1.25,
+    };
+    const mat = worldMaterial(new MeshStandardMaterial({ map: art.map, emissiveMap: art.emissiveMap, emissive: new Color(0.55, 0.8, 0.6), emissiveIntensity: 0, roughness: 0.62, metalness: 0.1 }), {
+      key: 'panel-' + surfaceDetailKey(faceDetail),
+      hooks: [surfaceDetailHook(faceDetail)],
+    });
     this.backlitMats.push(mat);
     const face = new Mesh(new BoxGeometry(spec.size[0], spec.size[1], 0.008), [m(PAINT, 0.7), m(PAINT, 0.7), m(PAINT, 0.7), m(PAINT, 0.7), mat, m(PAINT, 0.7)]);
     face.position.z = -0.004;
@@ -441,8 +557,31 @@ export class Cockpit {
   }
 
   private buildSeat(): void {
-    const cushion = m(0x3a3d33, 0.95);
-    const frame = m(0x26292c, 0.55, 0.5);
+    // seat cushions: olive canvas over foam; structure: painted steel
+    const cushion = mt(0x4a4c3c, 0.95, 0, 'canvas', {
+      normal: libTexture('canvas', 'normal'),
+      normalTile: 0.06,
+      normalStrength: 0.9,
+      rough: libTexture('canvas', 'roughness'),
+      roughTile: 0.08,
+      roughLo: 0.9,
+      roughHi: 1.05,
+      albedo: libTexture('canvas', 'albedo'),
+      albedoTile: 0.08,
+      albedoAmount: 0.45,
+    });
+    const frame = mt(0x2a2d30, 0.55, 0.5, 'seatframe', paintDetail());
+    const webbing = mt(0x3b3d31, 0.9, 0, 'webbing', {
+      normal: libTexture('webbing', 'normal'),
+      normalTile: 0.04,
+      normalStrength: 1.0,
+      rough: libTexture('webbing', 'roughness'),
+      roughTile: 0.05,
+      albedo: libTexture('webbing', 'albedo'),
+      albedoTile: 0.05,
+      albedoAmount: 0.5,
+    });
+    const steel = mt(0xa9adb0, 0.3, 0.9, 'buckle', { rough: libTexture('scratches', 'mask'), roughTile: 0.1, roughLo: 0.8, roughHi: 1.8 });
     const seat = new Group();
     const pan = new Mesh(new RoundedBoxGeometry(0.42, 0.09, 0.46, 3, 0.03), cushion);
     pan.position.set(0, 0.17, -4.1);
@@ -483,11 +622,69 @@ export class Cockpit {
     tri.rotation.x = Math.PI / 2 + 0.17;
     tri.position.set(0, 1.12, -3.86);
     seat.add(tri);
+    // drogue-chute container on top of the headbox and parachute risers
+    const drogue = new Mesh(new CylinderGeometry(0.075, 0.075, 0.28, 16), frame);
+    drogue.rotation.z = Math.PI / 2;
+    drogue.position.set(0, 1.23, -3.7);
+    seat.add(drogue);
+    for (const s of [-1, 1]) {
+      const riser = new Mesh(new BoxGeometry(0.05, 0.3, 0.06), cushion);
+      riser.position.set(s * 0.13, 0.98, -3.8);
+      riser.rotation.x = 0.17;
+      seat.add(riser);
+    }
+    // survival kit / seat pan with grab handles and leg-restraint garter rings
+    const kit = new Mesh(new RoundedBoxGeometry(0.44, 0.1, 0.48, 2, 0.015), frame);
+    kit.position.set(0, 0.08, -4.1);
+    seat.add(kit);
+    for (const s of [-1, 1]) {
+      const grab = new Mesh(new TorusGeometry(0.03, 0.006, 6, 12, Math.PI), steel);
+      grab.position.set(s * 0.24, 0.12, -4.22);
+      grab.rotation.y = Math.PI / 2;
+      seat.add(grab);
+      const garter = new Mesh(new TorusGeometry(0.022, 0.005, 6, 12), steel);
+      garter.position.set(s * 0.17, 0.2, -4.33);
+      garter.rotation.x = Math.PI / 2;
+      seat.add(garter);
+      // lap belt and shoulder-harness ends lying on the seat sides
+      const lap = new Mesh(new BoxGeometry(0.045, 0.004, 0.22), webbing);
+      lap.position.set(s * 0.2, 0.225, -4.02);
+      lap.rotation.z = s * 0.4;
+      seat.add(lap);
+      const koch = new Mesh(new BoxGeometry(0.045, 0.012, 0.035), steel);
+      koch.position.set(s * 0.16, 0.24, -4.11);
+      seat.add(koch);
+      // seat-firing safety lever (striped) on the left side of the bucket
+      if (s < 0) {
+        const lever = new Mesh(new BoxGeometry(0.012, 0.012, 0.09), m(0xe2b21e, 0.5));
+        lever.position.set(-0.25, 0.27, -4.18);
+        lever.rotation.x = -0.4;
+        seat.add(lever);
+      }
+    }
     this.staticRoot.add(seat);
   }
 
   private buildStickThrottlePedals(): void {
-    const grip = m(0x161718, 0.55);
+    // moulded rubber grips (scanned rubber grain)
+    const grip = mt(0x18191a, 0.62, 0, 'grip', {
+      normal: libTexture('rubber', 'normal'),
+      normalTile: 0.04,
+      normalStrength: 1.0,
+      rough: libTexture('plastic', 'roughness'),
+      roughTile: 0.06,
+      roughLo: 0.85,
+      roughHi: 1.15,
+    });
+    const pedalMat = mt(0x2c2f33, 0.6, 0.4, 'pedal', {
+      normal: libTexture('tread-plate', 'normal'),
+      normalTile: 0.08,
+      normalStrength: 1.0,
+      rough: libTexture('tread-plate', 'roughness'),
+      roughTile: 0.08,
+      roughLo: 0.8,
+      roughHi: 1.2,
+    });
     const boot = m(0x0e0e0f, 0.85);
     const metalM = m(0x9da2a6, 0.35, 0.8);
     // side-stick on the right console
@@ -521,7 +718,7 @@ export class Cockpit {
     this.root.add(this.throttleLever);
     // rudder pedals
     for (const [s, p] of [[-1, this.pedalL], [1, this.pedalR]] as const) {
-      const plate = new Mesh(new RoundedBoxGeometry(0.09, 0.16, 0.025, 2, 0.008), m(0x2c2f33, 0.6, 0.4));
+      const plate = new Mesh(new RoundedBoxGeometry(0.09, 0.16, 0.025, 2, 0.008), pedalMat);
       plate.rotation.x = -0.5;
       const arm = new Mesh(new BoxGeometry(0.02, 0.2, 0.02), metalM);
       arm.position.set(0, 0.1, 0.02);
