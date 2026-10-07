@@ -4,7 +4,7 @@
 // (wings, flaps, stabs, fins, rudders) with real NACA thickness, bubble canopy,
 // nozzle petals. Body frame: x right, y up, z aft (metres).
 
-import { BufferAttribute, BufferGeometry, Vector3 } from 'three';
+import { BufferAttribute, BufferGeometry, ExtrudeGeometry, Matrix4, Shape, Vector3 } from 'three';
 
 // ---------------------------------------------------------------------------
 // fuselage key stations
@@ -494,7 +494,9 @@ export function buildCanopy(): { glass: BufferGeometry; frame: BufferGeometry } 
 
 // ---------------------------------------------------------------------------
 // nozzle: one petal (instanced around the axis) and the inner liner
-export const NOZZLE = { z0: 7.05, length: 1.05, rootR: 0.6, petals: 18 };
+// 15 partially overlapping flaps whose trailing edges form a sawtooth
+// (F135 practice: the serrations shed vortices and break up edge returns)
+export const NOZZLE = { z0: 7.05, length: 1.05, rootR: 0.6, petals: 15, tooth: 0.09 };
 
 export function buildNozzlePetal(): BufferGeometry {
   // petal lies along +z from the hinge ring, outer surface at radius 1 (scaled at runtime)
@@ -503,13 +505,19 @@ export function buildNozzlePetal(): BufferGeometry {
   const segs = 6;
   for (let i = 0; i < segs; i++) {
     const a0 = -w + (2 * w * i) / segs, a1 = -w + (2 * w * (i + 1)) / segs;
-    for (const [r, z0, z1] of [[1, 0, 1]] as const) {
+    // trailing edge rises to a point at the flap centre line (sawtooth)
+    const tip = (a: number) => 1 + NOZZLE.tooth * (1 - Math.abs(a) / w);
+    for (const r of [1] as const) {
       const p = (a: number, z: number, rr: number) => [Math.sin(a) * rr, Math.cos(a) * rr, z];
+      const z0 = 0, z1a = tip(a0), z1b = tip(a1);
       // outer face wound to face away from the axis, inner face towards it
-      const v00 = p(a0, z0, r), v10 = p(a1, z0, r), v01 = p(a0, z1, r), v11 = p(a1, z1, r);
+      const v00 = p(a0, z0, r), v10 = p(a1, z0, r), v01 = p(a0, z1a, r), v11 = p(a1, z1b, r);
       pos.push(...v00, ...v01, ...v10, ...v10, ...v01, ...v11);
-      const i00 = p(a0, z0, r - 0.05), i10 = p(a1, z0, r - 0.05), i01 = p(a0, z1, r - 0.05), i11 = p(a1, z1, r - 0.05);
+      const i00 = p(a0, z0, r - 0.05), i10 = p(a1, z0, r - 0.05), i01 = p(a0, z1a, r - 0.05), i11 = p(a1, z1b, r - 0.05);
       pos.push(...i00, ...i10, ...i01, ...i10, ...i11, ...i01);
+      // thin end cap along the serrated edge
+      const e0 = p(a0, z1a, r), e1 = p(a1, z1b, r), f0 = p(a0, z1a, r - 0.05), f1 = p(a1, z1b, r - 0.05);
+      pos.push(...e0, ...f0, ...e1, ...e1, ...f0, ...f1);
     }
   }
   const g = new BufferGeometry();
@@ -521,6 +529,42 @@ export function buildNozzlePetal(): BufferGeometry {
   }
   g.setAttribute('uv', new BufferAttribute(uv, 2));
   g.computeVertexNormals();
+  return g;
+}
+
+/**
+ * Thin plate with sawtooth (zigzag) front and rear edges, as used on stealth
+ * gear/bay doors. Built in (u = across, v = along, t = thickness) and
+ * returned with u -> x, v -> y, t -> z; callers re-orient it.
+ */
+export function buildSerratedPlate(width: number, length: number, thick: number, teeth: number, depth: number): BufferGeometry {
+  const sh = new Shape();
+  const tw = width / teeth;
+  sh.moveTo(0, 0);
+  for (let i = 0; i < teeth; i++) {
+    sh.lineTo(i * tw + tw / 2, -depth);
+    sh.lineTo((i + 1) * tw, 0);
+  }
+  sh.lineTo(width, length);
+  for (let i = teeth - 1; i >= 0; i--) {
+    sh.lineTo(i * tw + tw / 2, length + depth);
+    sh.lineTo(i * tw, length);
+  }
+  sh.closePath();
+  const g = new ExtrudeGeometry(sh, { depth: thick, bevelEnabled: false });
+  g.translate(0, 0, -thick / 2);
+  return g;
+}
+
+/** Re-orient a buildSerratedPlate geometry (rotation-only basis, keeps winding). */
+export function orientPlate(g: BufferGeometry, across: 'x' | 'y', along: 'z'): BufferGeometry {
+  const m = new Matrix4();
+  // (u, v, t) -> (t, u, v): across = y, along = z, thickness = x   [cyclic, det +1]
+  if (across === 'y') m.set(0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1);
+  // (u, v, t) -> (u, -t, v): across = x, along = z, thickness = y   [det +1]
+  else m.set(1, 0, 0, 0, 0, 0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1);
+  void along;
+  g.applyMatrix4(m);
   return g;
 }
 
@@ -567,11 +611,13 @@ export const WING: PanelSpec = {
   nChord: 22,
   uvRect: [0, 0, 1, 1],
 };
+// edge alignment (F-22 / F-35 practice): stabilator leading edge parallel to
+// the wing leading edge (42.6 deg), trailing edge mirrors the wing TE angle
 export const STAB: PanelSpec = {
-  rootLE: [0.95, -0.06, 4.85],
-  tipLE: [3.15, -0.1, 6.35],
-  rootChord: 2.55,
-  tipChord: 1.0,
+  rootLE: [0.95, -0.06, 4.6],
+  tipLE: [3.1, -0.1, 6.58],
+  rootChord: 2.45,
+  tipChord: 0.96,
   thickRoot: 0.04,
   thickTip: 0.03,
   c0: 0,
@@ -584,7 +630,8 @@ export const STAB: PanelSpec = {
 const FIN_CANT = (24 * Math.PI) / 180;
 export const FIN: PanelSpec = {
   rootLE: [0.92, 0.72, 3.55],
-  tipLE: [0.92 + Math.sin(FIN_CANT) * 2.35, 0.72 + Math.cos(FIN_CANT) * 2.35, 5.55],
+  // fin leading edge swept 42.6 deg in its canted plane, matching the wing
+  tipLE: [0.92 + Math.sin(FIN_CANT) * 2.35, 0.72 + Math.cos(FIN_CANT) * 2.35, 3.55 + 2.35 * Math.tan((42.6 * Math.PI) / 180)],
   rootChord: 3.05,
   tipChord: 1.3,
   thickRoot: 0.042,

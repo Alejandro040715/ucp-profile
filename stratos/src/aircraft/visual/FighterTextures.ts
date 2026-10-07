@@ -207,6 +207,44 @@ class Painter {
     if (opts.label) this.stencil(opts.label, x + w / 2, y + h / 2, opts.labelSize ?? 14, 0, 'rgba(25,25,25,0.75)');
   }
 
+  /**
+   * Door / hatch outline with sawtooth front and rear edges (x = along the
+   * airflow), engraved into the height map with a faint seal line.
+   */
+  sawPanel(x: number, y: number, w: number, h: number, teeth: number, depth: number, opts: { tone?: number; label?: string; labelSize?: number } = {}): void {
+    const path = (ctx: CanvasRenderingContext2D) => {
+      const th = h / teeth;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      for (let i = 0; i < teeth; i++) {
+        ctx.lineTo(x - depth, y + i * th + th / 2);
+        ctx.lineTo(x, y + (i + 1) * th);
+      }
+      ctx.lineTo(x + w, y + h);
+      for (let i = teeth - 1; i >= 0; i--) {
+        ctx.lineTo(x + w + depth, y + i * th + th / 2);
+        ctx.lineTo(x + w, y + i * th);
+      }
+      ctx.closePath();
+    };
+    const c = this.color;
+    if (opts.tone) {
+      c.fillStyle = opts.tone > 0 ? `rgba(255,255,255,${opts.tone})` : `rgba(0,0,0,${-opts.tone})`;
+      path(c);
+      c.fill();
+    }
+    c.strokeStyle = 'rgba(0,0,0,0.22)';
+    c.lineWidth = 1.8;
+    path(c);
+    c.stroke();
+    const hh = this.height;
+    hh.strokeStyle = 'rgb(55,55,55)';
+    hh.lineWidth = 2.2;
+    path(hh);
+    hh.stroke();
+    if (opts.label) this.stencil(opts.label, x + w / 2, y + h / 2, opts.labelSize ?? 14, 0, 'rgba(25,25,25,0.6)');
+  }
+
   stencil(text: string, x: number, y: number, size: number, rot = 0, color = 'rgba(20,20,20,0.8)', scaleX = 1, scaleY = 1): void {
     const c = this.color;
     c.save();
@@ -483,11 +521,26 @@ export function paintFuselage(scheme: PaintScheme, perimeter: (z: number) => num
   p.rough.fillRect(X(-2.7), Yu(0.965), X(-0.6) - X(-2.7), Yu(0.07));
   c.fillRect(X(-2.7), 0, X(-0.6) - X(-2.7), Yu(0.035));
   p.rough.fillRect(X(-2.7), 0, X(-0.6) - X(-2.7), Yu(0.035));
-  // antenna & light footprints (formation light strips: lighter rectangles)
-  for (const side of [0.24, 0.76]) {
-    c.fillStyle = 'rgba(190,210,170,0.5)';
-    c.fillRect(X(-6.4), Yu(side) - 4, 0.6 * pxPerM, 8);
-    c.fillRect(X(5.0), Yu(side) - 4, 0.6 * pxPerM, 8);
+  // --- sawtooth-edged doors (every opening on a low-observable airframe)
+  {
+    const teethPx = 0.09 * pxPerM;
+    const across = (u0: number, u1: number) => [Yu(u0), Yu(u1) - Yu(u0)] as const;
+    // internal weapons-bay doors on the underside, either side of the keel
+    for (const [u0, u1] of [[0.445, 0.497], [0.503, 0.555]] as const) {
+      const [y0, hh] = across(u0, u1);
+      p.sawPanel(X(-3.3), y0, X(0.2) - X(-3.3), hh, 4, teethPx, { tone: -0.03 });
+    }
+    // flare / chaff dispenser doors aft of the bays
+    for (const [u0, u1] of [[0.462, 0.49], [0.51, 0.538]] as const) {
+      const [y0, hh] = across(u0, u1);
+      p.sawPanel(X(2.55), y0, X(3.05) - X(2.55), hh, 2, teethPx * 0.6, { tone: -0.04 });
+    }
+    // dorsal air-refuelling receptacle door (spine, wraps the u = 0/1 seam)
+    for (const yOff of [0, H]) {
+      p.sawPanel(X(0.95), yOff - Yu(0.022), X(1.6) - X(0.95), Yu(0.044), 2, teethPx * 0.7, { tone: -0.05 });
+    }
+    st('AIR REFUEL', 1.75, 0.03, 0.035);
+    st('AIR REFUEL', 1.75, 0.97, 0.035);
   }
   // --- weathering from real scans (grime, water spots, dirt, smudges, wear)
   {

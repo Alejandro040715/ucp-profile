@@ -6,10 +6,11 @@
 
 import {
   BoxGeometry, Color, CylinderGeometry, Group, Mesh, MeshPhysicalMaterial, MeshStandardMaterial, Object3D, Quaternion, SphereGeometry, TorusGeometry, Vector3,
-  type BufferGeometry, type Material, type Texture, DoubleSide, MeshBasicMaterial, AdditiveBlending, ConeGeometry,
+  type BufferGeometry, type Material, type Texture, DoubleSide, MeshBasicMaterial, AdditiveBlending, ConeGeometry, BufferAttribute, Matrix4,
 } from 'three';
 import {
   buildFuselage, buildIntake, buildPanel, buildCanopy, buildNozzlePetal, revolve, hingeOf, mirrorSpec, WING, STAB, FIN, NOZZLE, CANOPY_HINGE, stationAt,
+  buildSerratedPlate, orientPlate, sectionLoop,
   type PanelSpec,
 } from './FighterGeometry.ts';
 import { paintFuselage, paintPanelAtlas, paintNozzle, SCHEMES, type MaterialMaps, type PaintScheme } from './FighterTextures.ts';
@@ -46,7 +47,7 @@ export interface AircraftVisualState {
   ab: number;
   navLights: boolean;
   strobes: boolean;
-  formation: boolean;
+  formation: number; // 0 off .. 1 bright
   damageL: number;
   damageR: number;
   damageTail: number;
@@ -56,7 +57,7 @@ export function defaultVisualState(): AircraftVisualState {
   return {
     stabL: 0, stabR: 0, flapL: 0, flapR: 0, rudder: 0, lef: 0, airbrake: 0, canopy: 0, nozzle: 0.4,
     gear: [0, 1, 2].map(() => ({ ext: 1, door: 1, compression: 0.12, wheelAngle: 0, steer: 0, broken: false })),
-    heat: 0, ab: 0, navLights: false, strobes: false, formation: false, damageL: 1, damageR: 1, damageTail: 1,
+    heat: 0, ab: 0, navLights: false, strobes: false, formation: 0, damageL: 1, damageR: 1, damageTail: 1,
   };
 }
 
@@ -99,6 +100,17 @@ function paintMaterial(maps: MaterialMaps, key: string): MeshStandardMaterial {
   return worldMaterial(m, { key: 'paint' + key + surfaceDetailKey(detail), hooks: [sunOcclusionHook, surfaceDetailHook(detail)] });
 }
 
+/** gear doors sample a small patch of the fuselage underside paint */
+function doorUV(g: BufferGeometry): void {
+  const pos = g.attributes.position;
+  const uv = new Float32Array(pos.count * 2);
+  for (let i = 0; i < pos.count; i++) {
+    uv[i * 2] = 0.52 + pos.getZ(i) * 0.03;
+    uv[i * 2 + 1] = 0.5 + (pos.getX(i) + pos.getY(i)) * 0.03;
+  }
+  g.setAttribute('uv', new BufferAttribute(uv, 2));
+}
+
 /** lit standard material with optional scanned surface detail */
 function litMat(params: ConstructorParameters<typeof MeshStandardMaterial>[0], key: string, detail?: SurfaceDetailOptions): MeshStandardMaterial {
   const hooks = [sunOcclusionHook];
@@ -114,6 +126,7 @@ export class FighterModel {
   private gearParts: { leg: Group; piston: Object3D; wheel: Object3D; steer: Object3D; doors: { obj: Object3D; axis: Vector3; angle: number }[]; mount: Vector3; strut: number; id: string }[] = [];
   private petals: Object3D[] = [];
   private nozzleGlow: MeshStandardMaterial;
+  private formationMat!: MeshStandardMaterial;
   private abCore: Mesh;
   readonly canopyPivot = new Group();
   readonly lightAnchors: Record<string, Vector3> = {};
@@ -314,16 +327,33 @@ export class FighterModel {
     // ---- landing gear
     this.buildGear(gearPaint, chrome, tyre, hub, paintFus, dark);
     // ---- sensors, probes, antennas
-    const chin = new Mesh(new SphereGeometry(0.17, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), sensorGlass);
-    chin.rotation.x = Math.PI;
-    chin.position.set(0, -0.48, -6.7);
-    chin.scale.set(1, 0.8, 1.5);
-    this.add(chin);
+    // EOTS-style chin sensor: faceted sapphire window (7 flat facets) in a low
+    // fairing, sensor ball visible behind the glass
+    {
+      const eots = new Group();
+      const fairing = new Mesh(new CylinderGeometry(0.2, 0.26, 0.07, 7, 1), paintFus);
+      fairing.position.y = 0.035;
+      const win = new Mesh(new CylinderGeometry(0.07, 0.2, 0.13, 7, 1), worldMaterial(new MeshStandardMaterial({ color: 0x4a3512, roughness: 0.04, metalness: 0.85, flatShading: true, transparent: true, opacity: 0.88 }), { hooks: [sunOcclusionHook], key: 'eots' }));
+      win.position.y = -0.065;
+      const ball = new Mesh(new SphereGeometry(0.09, 16, 10), worldMaterial(new MeshStandardMaterial({ color: 0x0c0c0e, roughness: 0.25, metalness: 0.4 }), { hooks: [sunOcclusionHook] }));
+      ball.position.y = -0.05;
+      eots.add(fairing, ball, win);
+      eots.rotation.x = Math.PI; // hang below the chin
+      eots.scale.set(1, 1, 1.45);
+      eots.position.set(0, -0.47, -6.75);
+      this.add(eots);
+    }
     for (const side of [1, -1]) {
-      const pitot = new Mesh(new CylinderGeometry(0.012, 0.02, 0.55, 6), chrome);
-      pitot.rotation.x = Math.PI / 2;
-      pitot.position.set(side * 0.42, -0.02, -7.65);
-      this.add(pitot);
+      // L-shaped air-data probes (F-22 style): short stem out of the skin,
+      // tube pointing into the free stream
+      const stem = new Mesh(new CylinderGeometry(0.009, 0.014, 0.09, 6), chrome);
+      stem.rotation.z = Math.PI / 2;
+      stem.position.set(side * 0.47, -0.06, -7.45);
+      this.add(stem);
+      const tube = new Mesh(new CylinderGeometry(0.006, 0.01, 0.26, 8), chrome);
+      tube.rotation.x = Math.PI / 2;
+      tube.position.set(side * 0.515, -0.06, -7.57);
+      this.add(tube);
       const vane = new Mesh(new BoxGeometry(0.01, 0.06, 0.12), frameMat);
       vane.position.set(side * 0.55, 0.12, -7.0);
       this.add(vane);
@@ -338,6 +368,71 @@ export class FighterModel {
     blade(0, 0.92, 2.8, 0.14);
     blade(0, -0.82, -1.9, 0.18, true);
     blade(0.3, -0.84, 3.6, 0.12, true);
+    // ---- electroluminescent formation-light strips ("slime lights"): pale
+    // grey-green panels flush on the skin, glowing green when switched on
+    this.formationMat = worldMaterial(new MeshStandardMaterial({ color: 0xa9b39c, roughness: 0.35, metalness: 0, emissive: new Color(0.35, 1.0, 0.45), emissiveIntensity: 0 }), { hooks: [sunOcclusionHook], key: 'formation' });
+    const strip = (pos: Vector3, along: Vector3, normal: Vector3, len: number) => {
+      const g = new BoxGeometry(0.04, len, 0.006);
+      const mesh = new Mesh(g, this.formationMat);
+      // local y -> along, local z -> normal
+      const x = new Vector3().crossVectors(along, normal).normalize();
+      mesh.quaternion.setFromRotationMatrix(new Matrix4().makeBasis(x, along.clone().normalize(), normal.clone().normalize()));
+      mesh.position.copy(pos).addScaledVector(normal, 0.004);
+      mesh.userData.noMerge = true;
+      this.root.add(mesh);
+    };
+    for (const side of [1, -1]) {
+      // fuselage sides: below the cockpit and on the aft fuselage, just above the chine
+      for (const [zc, len] of [[-6.15, 0.75], [4.75, 0.7]] as const) {
+        const st = stationAt(zc);
+        const loop = sectionLoop(st, 72);
+        const n = loop.length;
+        // right-side point a little above the chine (loop index 0 = top, n/4 ~ chine)
+        const target = st.cy + st.chineY + 0.07;
+        let best = 0, bestD = 1e9;
+        for (let i = 1; i < n / 2; i++) {
+          const d = Math.abs(loop[i][1] - target);
+          if (d < bestD) { bestD = d; best = i; }
+        }
+        const a = loop[best - 1], b = loop[best + 1];
+        const nrm = new Vector3(side * (b[1] - a[1]), -(b[0] - a[0]), 0).normalize();
+        if (nrm.x * side < 0) nrm.negate();
+        strip(new Vector3(side * loop[best][0], loop[best][1], zc), new Vector3(0, 0, 1), nrm, len);
+      }
+      // outer face of each canted fin, mid-chord from 15 % to 75 % span
+      const spec = side > 0 ? FIN : mirrorSpec(FIN);
+      const rl = new Vector3(...spec.rootLE), tl = new Vector3(...spec.tipLE);
+      const span = new Vector3().subVectors(tl, rl);
+      const at = (sf: number) => rl.clone().addScaledVector(span, sf).add(new Vector3(0, 0, (spec.rootChord + (spec.tipChord - spec.rootChord) * sf) * 0.42));
+      const p0 = at(0.15), p1 = at(0.75);
+      const nrm = new Vector3().crossVectors(span, new Vector3(0, 0, 1)).normalize();
+      if (nrm.x * side < 0) nrm.negate();
+      const mid = p0.clone().lerp(p1, 0.5).addScaledVector(nrm, 0.042);
+      strip(mid, new Vector3().subVectors(p1, p0), nrm, p0.distanceTo(p1));
+    }
+    // ---- static dischargers (wicks) on wing, stabilator and fin trailing edges
+    {
+      const wickGeo = new CylinderGeometry(0.0035, 0.005, 0.13, 5);
+      wickGeo.rotateX(Math.PI / 2);
+      wickGeo.translate(0, 0, 0.065);
+      const wick = (pos: Vector3, parent: Object3D = this.root, local = false) => {
+        const w = new Mesh(wickGeo, frameMat);
+        w.position.copy(pos);
+        if (!local) w.userData.noMerge = true;
+        parent.add(w);
+      };
+      const te = (spec: PanelSpec, sf: number) => new Vector3(...spec.rootLE).lerp(new Vector3(...spec.tipLE), sf).add(new Vector3(0, 0, spec.rootChord + (spec.tipChord - spec.rootChord) * sf));
+      for (const side of [1, -1]) {
+        const ws = side > 0 ? WING : mirrorSpec(WING);
+        for (const sf of [0.94, 0.985]) wick(te(ws, sf));
+        const fs = side > 0 ? FIN : mirrorSpec(FIN);
+        wick(te(fs, 0.95));
+        // all-moving stabilator: the wick rides on its pivot
+        const stab = this.hinges[side > 0 ? 'stabR' : 'stabL'];
+        const ss = side > 0 ? STAB : mirrorSpec(STAB);
+        wick(te(ss, 0.92).sub(stab.pivot.position), stab.pivot, true);
+      }
+    }
     // anchors for effects / lights
     this.lightAnchors.tail = new Vector3(0, 0.55, 7.25);
     this.lightAnchors.landing = new Vector3(0, -1.2, -5.25);
@@ -443,8 +538,10 @@ export class FighterModel {
         lamp.position.set(0, -0.35, -0.12);
         legGroup.add(lamp);
         for (const s of [-1, 1]) {
-          const dg = new BoxGeometry(0.02, 0.32, 1.5);
-          dg.translate(0, -0.16, 0.6);
+          // sawtooth front/aft edges (every opening on a stealth airframe)
+          const dg = orientPlate(buildSerratedPlate(0.32, 1.5, 0.02, 3, 0.07), 'y', 'z');
+          dg.translate(0, -0.32, -0.15);
+          doorUV(dg);
           const d = new Mesh(dg, skin);
           d.position.set(mount.x + s * 0.2, mount.y - 0.12, mount.z);
           this.root.add(d);
@@ -452,8 +549,9 @@ export class FighterModel {
         }
       } else {
         const s = Math.sign(mount.x);
-        const dg = new BoxGeometry(0.75, 0.02, 2.0);
-        dg.translate(-s * 0.37, 0, -0.85);
+        const dg = orientPlate(buildSerratedPlate(0.75, 2.0, 0.02, 4, 0.09), 'x', 'z');
+        dg.translate(s > 0 ? -0.745 : -0.005, 0, -1.85);
+        doorUV(dg);
         const d = new Mesh(dg, skin);
         d.position.set(mount.x + s * 0.3, mount.y - 0.42, mount.z);
         this.root.add(d);
@@ -485,7 +583,7 @@ export class FighterModel {
     const flare = -0.08 + 0.2 * s.nozzle;
     for (const p of this.petals) p.rotation.x = flare;
     // a turbine at idle does not visibly glow; dull red appears only near MIL
-    this.nozzleGlow.emissiveIntensity = Math.pow(s.heat, 2.5) * 1.2 + s.ab * 18;
+    this.nozzleGlow.emissiveIntensity = Math.pow(Math.max(0, s.heat - 0.55) / 0.45, 2) * 0.8 + s.ab * 18;
     this.nozzleGlow.emissive.setRGB(1.0, 0.35 + 0.3 * s.ab, 0.08 + 0.25 * s.ab);
     const abm = this.abCore.material as MeshBasicMaterial;
     abm.opacity = s.ab * 0.9;
@@ -510,6 +608,8 @@ export class FighterModel {
       // hide when fully retracted and doors closed
       gp.leg.visible = gv.ext > 0.01 || gv.door > 0.01;
     }
+    // formation strips follow the FORMATION knob
+    this.formationMat.emissiveIntensity = s.formation * 2.2;
     // damage: missing wingtips / tail pieces
     for (const o of this.damageParts.leftWingTip) o.visible = s.damageL > 0.2;
     for (const o of this.damageParts.rightWingTip) o.visible = s.damageR > 0.2;

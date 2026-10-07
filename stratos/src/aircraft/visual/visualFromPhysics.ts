@@ -4,7 +4,7 @@ import type { AircraftPhysics } from '../AircraftPhysics.ts';
 import type { AircraftVisualState } from './FighterModel.ts';
 import { clamp } from '../../core/math.ts';
 
-export function visualFromPhysics(ac: AircraftPhysics, out: AircraftVisualState, lights: { nav: boolean; strobe: boolean; formation: boolean }, canopyOpen: number): AircraftVisualState {
+export function visualFromPhysics(ac: AircraftPhysics, out: AircraftVisualState, lights: { nav: boolean; strobe: boolean; formation: number }, canopyOpen: number): AircraftVisualState {
   const s = ac.surfaces;
   out.stabL = s.stabLeft();
   out.stabR = s.stabRight();

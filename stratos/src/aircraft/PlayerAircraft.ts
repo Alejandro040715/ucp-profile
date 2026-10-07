@@ -275,7 +275,7 @@ export class PlayerAircraft {
     this.model.root.quaternion.copy(this.renderQuat);
     // visuals
     const lightsPowered = main;
-    visualFromPhysics(ph, this.visual, { nav: this.lights.nav && lightsPowered, strobe: this.lights.strobe && lightsPowered, formation: this.lights.formation > 0 && lightsPowered }, this.canopy);
+    visualFromPhysics(ph, this.visual, { nav: this.lights.nav && lightsPowered, strobe: this.lights.strobe && lightsPowered, formation: lightsPowered ? this.lights.formation : 0 }, this.canopy);
     this.model.update(this.visual, this.time);
     // cockpit animation
     const gearLights = ph.gear.legs.map((l) => (l.broken ? 2 : l.extension >= 1 ? 1 : l.extension > 0 ? 2 : 0));
