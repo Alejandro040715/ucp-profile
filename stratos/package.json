@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit -p .",
     "test:physics": "node --experimental-strip-types tests/physics.test.ts",
     "shots": "node tests/shot.mjs 0 tests/shots/exterior.js",
-    "artifact": "vite build && node scripts/artifact.mjs"
+    "artifact": "node scripts/textures.mjs && vite build && node scripts/artifact.mjs",
+    "textures": "node scripts/textures.mjs"
   },
   "dependencies": {
     "three": "0.186.1"

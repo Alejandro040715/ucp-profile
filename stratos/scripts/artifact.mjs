@@ -1,7 +1,7 @@
 // Packages the Vite build as an embeddable page: inlines the stylesheet,
 // strips the document skeleton (the host adds its own) and keeps the module
 // bundle + terrain worker as sibling files. Usage: npm run build && node scripts/artifact.mjs [outDir]
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, copyFileSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, copyFileSync, rmSync, cpSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 const out = process.argv[2] ?? 'dist-artifact';
@@ -14,6 +14,8 @@ const fonts = html.match(/<link href="https:\/\/fonts\.googleapis\.com[^>]*>/)[0
 rmSync(out, { recursive: true, force: true });
 mkdirSync(join(out, 'assets'), { recursive: true });
 for (const f of assets.filter((f) => f.endsWith('.js'))) copyFileSync(join('dist/assets', f), join(out, 'assets', f));
+// real CC0 textures (public/textures -> dist/textures) ship as sibling files
+if (existsSync('dist/textures')) cpSync('dist/textures', join(out, 'textures'), { recursive: true });
 writeFileSync(
   join(out, 'index.html'),
   `<title>Stratos XF-41 Corvus</title>
