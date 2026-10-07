@@ -1,0 +1,47 @@
+name: Publish STRATOS
+
+on:
+  push:
+    branches: [stratos-web]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: stratos-pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: actions/configure-pages@v5
+      - name: Extract game source
+        run: unzip -q STRATOS-mejorado.zip -d game-source
+      - name: Install, verify and build
+        working-directory: game-source/stratos
+        run: |
+          npm ci
+          npm run typecheck
+          npm run test:physics
+          npm run test:combat
+          npm run test:clouds
+          npm run build
+          cp LICENSE dist/LICENSE
+          cp ../../STRATOS-mejorado.zip dist/STRATOS-source.zip
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: game-source/stratos/dist
+      - name: Publish game
+        id: deployment
+        uses: actions/deploy-pages@v4
