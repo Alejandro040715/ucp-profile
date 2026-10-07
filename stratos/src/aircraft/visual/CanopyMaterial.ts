@@ -5,6 +5,7 @@
 
 import { DoubleSide, ShaderMaterial, type Texture, Vector3 } from 'three';
 import { globals, CURVATURE_GLSL } from '../../render/Globals.ts';
+import { libTexture } from '../../assets/TextureLibrary.ts';
 import { SKY_LUT_GLSL } from '../../atmosphere/Sky.ts';
 
 export const canopyUniforms = {
@@ -15,8 +16,17 @@ export const canopyUniforms = {
 };
 
 export function createCanopyMaterial(skyLut: Texture): ShaderMaterial {
+  // scanned CC0 masks (dust, fingerprints, fine scratches); fall back to noise
+  const dust = libTexture('glass-dust', 'mask');
+  const prints = libTexture('glass-fingerprints', 'mask');
+  const scratches = libTexture('glass-scratches', 'mask');
+  const real = !!(dust && prints && scratches);
   return new ShaderMaterial({
+    defines: real ? { REAL_GLASS_MASKS: '' } : {},
     uniforms: {
+      uDust: { value: dust },
+      uPrints: { value: prints },
+      uScratches: { value: scratches },
       uSkyLut: { value: skyLut },
       uSunDir: globals.uSunDir,
       uSunColor: globals.uSunColor,
@@ -51,6 +61,9 @@ export function createCanopyMaterial(skyLut: Texture): ShaderMaterial {
       uniform float uSpeed;
       uniform float uInsideCam;
       uniform float uFrost;
+      uniform sampler2D uDust;
+      uniform sampler2D uPrints;
+      uniform sampler2D uScratches;
       varying vec3 vWorldPos;
       varying vec3 vWorldN;
       varying vec2 vUv;
@@ -71,9 +84,18 @@ export function createCanopyMaterial(skyLut: Texture): ShaderMaterial {
         // sun specular + glint on scratches / dust
         vec3 H = normalize(uSunDir + V);
         float spec = pow(max(dot(N, H), 0.0), 900.0) * 60.0;
-        float scratch = texture2D(uNoiseTex, vUv * vec2(9.0, 4.0)).b;
-        float dust = texture2D(uNoiseTex, vUv * vec2(3.0, 1.5) + 0.3).a;
-        float glint = pow(max(dot(normalize(uSunDir), -V) * 0.5 + 0.5, 0.0), 24.0) * (smoothstep(0.78, 0.92, scratch) * 0.4 + dust * 0.15);
+        #ifdef REAL_GLASS_MASKS
+          // canopy is ~2.7 m long, ~1.6 m around: tile the scans at physical scale
+          float scratch = texture2D(uScratches, vUv * vec2(5.0, 3.0)).r;
+          float dust = texture2D(uDust, vUv * vec2(4.0, 2.5) + 0.37).r;
+          float prints = texture2D(uPrints, vUv * vec2(9.0, 5.0)).r * smoothstep(0.15, 0.45, abs(vUv.y - 0.5));
+          float fwd = pow(max(dot(normalize(uSunDir), -V) * 0.5 + 0.5, 0.0), 18.0);
+          float glint = fwd * (smoothstep(0.35, 0.8, scratch) * 0.32 + dust * 0.15 + prints * 0.2);
+        #else
+          float scratch = texture2D(uNoiseTex, vUv * vec2(9.0, 4.0)).b;
+          float dust = texture2D(uNoiseTex, vUv * vec2(3.0, 1.5) + 0.3).a;
+          float glint = pow(max(dot(normalize(uSunDir), -V) * 0.5 + 0.5, 0.0), 24.0) * (smoothstep(0.78, 0.92, scratch) * 0.4 + dust * 0.15);
+        #endif
         vec3 col = refl + uSunColor * (spec * F * gold + glint * 0.35);
         float alpha = clamp(0.08 + F * 0.85 + glint * 0.2, 0.0, 1.0);
         // rain droplets: jittered cells, stretched aft with airspeed
