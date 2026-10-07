@@ -28,6 +28,8 @@ jobs:
       - uses: actions/configure-pages@v5
       - name: Extract game source
         run: unzip -q STRATOS-mejorado.zip -d game-source
+      - name: Apply aircraft defence update
+        run: git apply --ignore-space-change --whitespace=nowarn --directory=game-source/stratos STRATOS-update.patch
       - name: Install, verify and build
         working-directory: game-source/stratos
         run: |
@@ -36,9 +38,12 @@ jobs:
           npm run test:physics
           npm run test:combat
           npm run test:clouds
+          npm run test:defense
+          npm run test:camera
           npm run build
           cp LICENSE dist/LICENSE
-          cp ../../STRATOS-mejorado.zip dist/STRATOS-source.zip
+          zip -qr ../../STRATOS-source.zip . -x 'node_modules/*' 'dist/*'
+          mv ../../STRATOS-source.zip dist/STRATOS-source.zip
       - uses: actions/upload-pages-artifact@v4
         with:
           path: game-source/stratos/dist
