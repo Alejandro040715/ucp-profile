@@ -1,0 +1,913 @@
+--- a/README.md
++++ b/README.md
+@@ -171,6 +171,26 @@
+ 
+ ## Pruebas
+ 
++### Defensa antiaérea y cabina estable
++
++En **PRÁCTICA DE COMBATE**, el objetivo **ANTIAÉREO IR** es una batería funcional:
++adquiere el avión con línea de visión, gira su torreta, lanza hasta cuatro misiles
++IR y causa daños si te alcanza. Destruir el lanzador evita nuevos disparos; los
++misiles que ya están en vuelo siguen activos. El vuelo libre no activa la batería.
++
++**V / F2**, o el botón **BENGALAS**, despliega dos de las 24 bengalas. Tienen cuatro
++segundos de vida y pueden atraer un misil IR cercano. Úsalas al aproximarse el
++misil y continúa maniobrando; soltarlas demasiado pronto no te protege.
++**Inicio** centra la vista. **Retroceso** restaura el avión y la práctica.
++
++La mira usa la misma pose interpolada que el avión. El HUD calcula sus rayos en
++espacio de cámara para evitar errores de precisión lejos del origen; sus lecturas
++tienen un filtro breve. La sacudida de cabina es suave y se estabiliza al apuntar.
++
++`npm run test:defense` comprueba adquisición, cobertura, impactos, bengalas,
++destrucción del lanzador y reinicio. `npm run test:camera` comprueba estabilidad
++con vibración y fuerzas G. Referencias públicas y créditos: `public/ENHANCEMENT-CREDITS.md`.
++
+ `npm run test:physics` vuela escenarios con guion y comprueba los números contra lo esperable en un caza moderno:
+ - Reposo en tierra y arranque del motor.
+ - Despegue a ~158 kt en MIL.
+--- a/package.json
++++ b/package.json
+@@ -12,6 +12,8 @@
+     "test:physics": "node --experimental-strip-types tests/physics.test.ts",
+     "test:combat": "node --experimental-strip-types tests/combat.test.ts",
+     "test:clouds": "node --experimental-strip-types tests/clouds.test.ts",
++    "test:defense": "node --experimental-strip-types tests/defense.test.ts",
++    "test:camera": "node --experimental-strip-types tests/camera.test.ts",
+     "shots": "node tests/shot.mjs 0 tests/shots/exterior.js",
+     "artifact": "node scripts/textures.mjs && vite build && node scripts/artifact.mjs",
+     "textures": "node scripts/textures.mjs"
+--- a/public/ENHANCEMENT-CREDITS.md
++++ b/public/ENHANCEMENT-CREDITS.md
+@@ -42,6 +42,19 @@
+ Original CC0 license and pack README: `clouds/JANGAFX-LICENSE.txt` and
+ `clouds/JANGAFX-README.txt`. The full VDB download is not required at runtime.
+ 
+-The new missile, drone, radar, truck and tank geometry is authored in code for
+-this game. Weapon movement is an arcade simulation; practice flares are visual
+-effects, and there are no hostile aircraft or incoming-missile countermeasures.
++The missile, drone, radar, vehicle launcher and storage tank geometry is authored
++in code for this game. No manufacturer model, photograph or proprietary asset
++is redistributed.
++
++## Air defence and countermeasures references
++
++- MBDA MISTRAL ATLAS RC (vehicle-mounted, rotating/elevating launcher and thermal sight):
++  https://www.mbda-systems.com/products/force-protection/mistral-family/mistral-atlas-rc
++- BAE Systems ALE-47 (airborne flare/chaff dispensing):
++  https://www.baesystems.com/en/product/ale47-airborne-countermeasures-dispenser-system
++
++These are public references for broad concepts only. The in-game IR battery,
++guidance, detection range, timings and decoy susceptibility are fictional arcade
++mechanics. It is not an accurate MISTRAL or ALE-47 simulation. Flares divert nearby
++IR practice missiles; they do not counter radar missiles. The battery is active
++only in combat practice. Aircraft damage uses the existing component system.
+--- a/src/audio/AudioSystem.ts
++++ b/src/audio/AudioSystem.ts
+@@ -298,6 +298,14 @@
+     events.on('weapon:lock', () => {
+       this.burst({ tone: 950, freq: 0, gain: 0.065, decay: 0.25, dest: this.interior });
+       this.burst({ tone: 1250, freq: 0, gain: 0.045, delay: 0.15, decay: 0.2, dest: this.interior });
++    });
++    events.on('weapon:threat', e => {
++      for (const delay of e.incoming ? [0, 0.16] : [0]) {
++        this.burst({ tone: e.incoming ? 1650 : 700, freq: 0, gain: 0.075, decay: 0.12, delay, dest: this.interior });
++      }
++    });
++    events.on('weapon:flare', () => {
++      this.burst({ kind: 'white', freq: 1700, type: 'lowpass', gain: 0.2, decay: 0.15, dest: this.exterior });
+     });
+     events.on('weapon:launch', e => {
+       this.burst({ kind: 'white', freq: e.kind === 'missile' ? 700 : 1800, type: 'lowpass', gain: e.kind === 'missile' ? 0.75 : 0.25,
+--- a/src/camera/CameraSystem.ts
++++ b/src/camera/CameraSystem.ts
+@@ -166,12 +166,14 @@
+     // head physics: neck as a spring driven by felt acceleration (body frame)
+     const sf = t.specificForce;
+     const gx = sf.x / 9.81, gy = sf.y / 9.81 - 1, gz = sf.z / 9.81;
+-    const s = this.shakeScale;
+-    const hx = this.headX.update(clamp(-gx * 0.018, -0.06, 0.06) * s, 16, 0.55, dt);
+-    const hy = this.headY.update(clamp(-gy * 0.011, -0.07, 0.03) * s, 14, 0.6, dt);
+-    const hz = this.headZ.update(clamp(gz * 0.012, -0.05, 0.05) * s, 16, 0.55, dt);
++    // Keep the sight readable: gentle, critically damped head motion. Aiming
++    // steadies the head instead of magnifying procedural shake with the zoom.
++    const s = this.shakeScale * (this.aiming ? 0 : 0.3);
++    const hx = this.headX.update(clamp(-gx * 0.018, -0.06, 0.06) * s, 16, 1, dt);
++    const hy = this.headY.update(clamp(-gy * 0.011, -0.07, 0.03) * s, 14, 1, dt);
++    const hz = this.headZ.update(clamp(gz * 0.012, -0.05, 0.05) * s, 16, 1, dt);
+     // vibration: engine + buffet + turbulence + impulses (touchdown, AB light)
+-    const vib = (t.vibration * 0.0016 + this.impulse * 0.01) * s;
++    const vib = (t.vibration * 0.0005 + this.impulse * 0.006) * s;
+     const sh = this.shake(dt, vib, 18 + t.vibration * 6);
+     // look-over-the-shoulder: head translates sideways and forward when turning far
+     const shoulder = clamp(Math.abs(this.lookYaw) - 1.0, 0, 1.6);
+@@ -181,7 +183,7 @@
+     cam.position.copy(_v);
+     // head turns into the roll (instinctive look into the turn)
+     const rollLead = clamp(-t.omega.z * 0.06, -0.12, 0.12);
+-    _e.set(this.lookPitch + sh.y * 2.5, this.lookYaw + rollLead * 0.3, rollLead * 0.15 + sh.x * 2.0, 'YXZ');
++    _e.set(this.lookPitch, this.lookYaw + rollLead * 0.3 * s, rollLead * 0.15 * s, 'YXZ');
+     _q.setFromEuler(_e);
+     cam.quaternion.copy(t.quaternion).multiply(_q);
+     // dynamic FOV: very subtle widening with speed and narrowing under G
+--- a/src/cockpit/HUD.ts
++++ b/src/cockpit/HUD.ts
+@@ -4,7 +4,7 @@
+ // angles and samples the canvas, so symbols stay conformal with the outside
+ // world regardless of head position, exactly like a real HUD.
+ 
+-import { AdditiveBlending, CanvasTexture, Color, DoubleSide, Group, LinearMipmapLinearFilter, Matrix3, Matrix4, Mesh, PlaneGeometry, ShaderMaterial, Vector3, type Quaternion } from 'three';
++import { AdditiveBlending, CanvasTexture, Color, DoubleSide, Group, LinearMipmapLinearFilter, Matrix3, Matrix4, Mesh, PlaneGeometry, ShaderMaterial, Vector3, Quaternion } from 'three';
+ import type { AircraftPhysics } from '../aircraft/AircraftPhysics.ts';
+ import { clamp, DEG, RAD, wrap360 } from '../core/math.ts';
+ import { AircraftConfig } from '../aircraft/AircraftConfig.ts';
+@@ -22,6 +22,7 @@
+   units: 'imperial' | 'metric';
+   mode: number; // 0 NORM, 1 DECLUTTER, 2 OFF
+   time: number;
++  dt: number;
+ }
+ 
+ export class HUD {
+@@ -35,6 +36,19 @@
+   color = new Color(0.45, 1.0, 0.55);
+   private bodyInv = new Matrix3();
+   private tmpM4 = new Matrix4();
++  private viewToBody = new Quaternion();
++  private renderBody = new Quaternion();
++  private display = new Map<string, number>();
++  reset(): void { this.display.clear(); }
++
++  private smooth(key: string, value: number, dt: number, period = 0): number {
++    const previous = this.display.get(key) ?? value;
++    let delta = value - previous;
++    if (period) delta = ((delta + period / 2) % period + period) % period - period / 2;
++    const result = previous + delta * (1 - Math.exp(-dt * 10));
++    this.display.set(key, result);
++    return result;
++  }
+   exposure = 1;
+ 
+   constructor() {
+@@ -51,20 +65,22 @@
+     this.glassMat = new ShaderMaterial({
+       uniforms: {
+         uHud: { value: this.texture },
+-        uBodyInv: { value: this.bodyInv },
++        uViewToBody: { value: this.bodyInv },
+         uColor: { value: this.color },
+         uIntensity: { value: 1 },
+         uFov: { value: FOV },
+         uElCenter: { value: EL_CENTER },
+       },
+       vertexShader: /* glsl */ `
+-        varying vec3 vWorldPos;
+-        void main() { vec4 wp = modelMatrix * vec4(position, 1.0); vWorldPos = wp.xyz; gl_Position = projectionMatrix * viewMatrix * wp; }`,
++        varying vec3 vViewPos;
++        void main() { vec4 vp = modelViewMatrix * vec4(position, 1.0); vViewPos = vp.xyz; gl_Position = projectionMatrix * vp; }`,
+       fragmentShader: /* glsl */ `
+-        uniform sampler2D uHud; uniform mat3 uBodyInv; uniform vec3 uColor; uniform float uIntensity; uniform float uFov; uniform float uElCenter;
+-        varying vec3 vWorldPos;
++        uniform sampler2D uHud; uniform mat3 uViewToBody; uniform vec3 uColor; uniform float uIntensity; uniform float uFov; uniform float uElCenter;
++        varying vec3 vViewPos;
+         void main() {
+-          vec3 d = normalize(uBodyInv * normalize(vWorldPos - cameraPosition));
++          // View-space subtraction is done on the CPU in modelViewMatrix.
++          // Subtracting two large float32 world coordinates made the HUD sparkle.
++          vec3 d = normalize(uViewToBody * vViewPos);
+           // body frame: forward = -z, up = +y, right = +x
+           float az = atan(d.x, -d.z);
+           float el = atan(d.y, length(vec2(d.x, d.z)));
+@@ -103,9 +119,11 @@
+     this.plate.rotation.set(-Math.atan2(n.y, n.z), 0, 0);
+   }
+ 
+-  update(ctx: HudContext, bodyQuat: Quaternion, powered: boolean): void {
++  update(ctx: HudContext, bodyQuat: Quaternion, powered: boolean, cameraQuat: Quaternion): void {
+     // world -> body rotation for the glass shader
+-    this.bodyInv.setFromMatrix4(this.tmpM4.makeRotationFromQuaternion(bodyQuat)).transpose();
++    this.viewToBody.copy(bodyQuat).invert().multiply(cameraQuat);
++    this.renderBody.copy(bodyQuat);
++    this.bodyInv.setFromMatrix4(this.tmpM4.makeRotationFromQuaternion(this.viewToBody));
+     const on = powered && this.power && ctx.mode !== 2;
+     // bright green against a daylight sky without clipping to white
+     // photocell auto-dimming at night keeps the symbology from blooming
+@@ -132,7 +150,10 @@
+   private draw(ctx: HudContext): void {
+     const g = this.g;
+     const ac = ctx.ac;
+-    const t = ac.t;
++    const t = { ...ac.t };
++    for (const key of ['ias', 'altitude', 'mach', 'alpha', 'nz', 'verticalSpeed', 'heading', 'bank', 'flightPathAngle'] as const) {
++      t[key] = this.smooth(key, t[key], ctx.dt, key === 'heading' ? 360 : key === 'bank' ? Math.PI * 2 : 0);
++    }
+     const imp = ctx.units === 'imperial';
+     const declutter = ctx.mode === 1;
+     g.clearRect(0, 0, RES, RES);
+@@ -152,13 +173,15 @@
+     };
+ 
+     // ---- flight path marker (velocity vector in body frame)
+-    const vb = ac.velocity.clone().applyQuaternion(ac.quaternion.clone().invert());
++    const vb = ac.velocity.clone().applyQuaternion(this.renderBody.clone().invert());
+     const speed = vb.length();
+     let fpAz = 0, fpEl = -t.alpha;
+     if (speed > 15) {
+       fpAz = Math.atan2(vb.x, -vb.z);
+       fpEl = Math.atan2(vb.y, Math.hypot(vb.x, vb.z));
+     }
++    fpAz = this.smooth('fpAz', fpAz, ctx.dt, Math.PI * 2);
++    fpEl = this.smooth('fpEl', fpEl, ctx.dt);
+     let fx = this.X(fpAz), fy = this.Y(fpEl);
+     const [lx0, ly0] = this.P(-7, 3.6), [lx1, ly1] = this.P(7, -10.5);
+     const clipped = fx < lx0 || fx > lx1 || fy < ly0 || fy > ly1;
+--- /dev/null
++++ b/src/combat/AirDefenseSimulation.ts
+@@ -0,0 +1,119 @@
++// Fictional training battery: optical acquisition, IR missiles and flare decoys.
++// Gameplay timings/ranges are deliberately arcade values, not real weapon data.
++import { Vector3 } from 'three';
++import type { CombatPose, Target } from './CombatSimulation.ts';
++
++export interface DecoyFlare {
++  id: number;
++  position: Vector3;
++  velocity: Vector3;
++  age: number;
++}
++export interface IncomingMissile {
++  id: number;
++  kind: 'sam';
++  position: Vector3;
++  previous: Vector3;
++  velocity: Vector3;
++  age: number;
++  decoyId: number | null;
++}
++export type DefenseEvent =
++  | { type: 'tracking' }
++  | { type: 'launch' }
++  | { type: 'decoy' }
++  | { type: 'blast'; position: Vector3 }
++  | { type: 'playerHit'; position: Vector3 };
++
++function segmentDistance(a: Vector3, b: Vector3, point: Vector3): number {
++  const line = b.clone().sub(a);
++  const t = Math.max(0, Math.min(1, point.clone().sub(a).dot(line) / Math.max(line.lengthSq(), 1e-9)));
++  return a.clone().addScaledVector(line, t).distanceTo(point);
++}
++
++export class AirDefenseSimulation {
++  enabled = false;
++  lockProgress = 0;
++  readonly missiles: IncomingMissile[] = [];
++  readonly flares: DecoyFlare[] = [];
++  readonly pending: DefenseEvent[] = [];
++  rounds = 4;
++  private cooldown = 8;
++  private serial = 100000;
++  private previousPlayer = new Vector3();
++  private height: (x: number, z: number) => number;
++
++  constructor(height: (x: number, z: number) => number) { this.height = height; }
++
++  reset(pose: CombatPose): void {
++    this.missiles.length = this.flares.length = this.pending.length = 0;
++    this.lockProgress = 0; this.rounds = 4; this.cooldown = 8;
++    this.previousPlayer.copy(pose.position);
++  }
++
++  deploy(position: Vector3, velocity: Vector3): void {
++    this.flares.push({ id: ++this.serial, position, velocity, age: 0 });
++  }
++
++  private clearSight(a: Vector3, b: Vector3): boolean {
++    const samples = Math.max(8, Math.ceil(a.distanceTo(b) / 180));
++    for (let i = 1; i < samples; i++) {
++      const p = a.clone().lerp(b, i / samples);
++      if (p.y < this.height(p.x, p.z) + 2) return false;
++    }
++    return true;
++  }
++
++  step(dt: number, pose: CombatPose, launcher: Target): void {
++    for (let i = this.flares.length - 1; i >= 0; i--) {
++      const f = this.flares[i]; f.age += dt;
++      f.velocity.multiplyScalar(Math.exp(-dt * 0.6)); f.velocity.y -= 9.8 * dt;
++      f.position.addScaledVector(f.velocity, dt);
++      if (f.age >= 4 || f.position.y <= this.height(f.position.x, f.position.z)) this.flares.splice(i, 1);
++    }
++    this.cooldown = Math.max(0, this.cooldown - dt);
++    const origin = launcher.position.clone().add(new Vector3(0, 4, 0));
++    const range = origin.distanceTo(pose.position);
++    const canTrack = this.enabled && launcher.alive && !pose.destroyed && !pose.onGround
++      && range > 180 && range < 8500 && pose.position.y > this.height(pose.position.x, pose.position.z) + 25
++      && pose.position.y - origin.y < 3000 && this.clearSight(origin, pose.position);
++    const wasTracking = this.lockProgress > 0;
++    this.lockProgress = canTrack ? Math.min(1, this.lockProgress + dt / 3) : 0;
++    if (this.lockProgress > 0 && !wasTracking) this.pending.push({ type: 'tracking' });
++    if (this.lockProgress === 1 && this.cooldown === 0 && this.rounds > 0
++      && !this.missiles.some(m => m.decoyId === null)) {
++      const direction = pose.position.clone().addScaledVector(pose.velocity, 1).sub(origin).normalize();
++      this.missiles.push({ id: ++this.serial, kind: 'sam', position: origin, previous: origin.clone(),
++        velocity: direction.multiplyScalar(260), age: 0, decoyId: null });
++      this.rounds--; this.cooldown = 16;
++      this.pending.push({ type: 'launch' });
++    }
++    for (let i = this.missiles.length - 1; i >= 0; i--) {
++      const m = this.missiles[i]; m.age += dt; m.previous.copy(m.position);
++      if (m.decoyId === null && m.position.distanceTo(pose.position) < 1800) {
++        const forward = m.velocity.clone().normalize();
++        const decoy = this.flares.find(f => f.age > 0.12 && f.age < 3.5 && m.position.distanceTo(f.position) < 1900
++          && forward.dot(f.position.clone().sub(m.position).normalize()) > 0.75);
++        if (decoy) { m.decoyId = decoy.id; this.pending.push({ type: 'decoy' }); }
++      }
++      const decoy = this.flares.find(f => f.id === m.decoyId);
++      const aim = m.decoyId === null && !pose.destroyed ? pose.position : decoy?.position;
++      if (aim && m.age < 18) {
++        const velocity = m.decoyId === null ? pose.velocity : decoy!.velocity;
++        const desired = aim.clone().addScaledVector(velocity, Math.min(1.2, m.position.distanceTo(aim) / 800)).sub(m.position).normalize();
++        const speed = Math.min(480, m.velocity.length() + dt * 100);
++        m.velocity.normalize().lerp(desired, 1 - Math.exp(-2.6 * dt)).normalize().multiplyScalar(speed);
++      } else m.velocity.y -= 9.8 * dt;
++      m.position.addScaledVector(m.velocity, dt);
++      // Sweep relative to the aircraft, so fast crossings cannot tunnel through it.
++      const a = m.previous.clone().sub(this.previousPlayer), b = m.position.clone().sub(pose.position);
++      const hit = !pose.destroyed && !pose.onGround && segmentDistance(a, b, new Vector3()) < 12;
++      const decoyHit = decoy && segmentDistance(m.previous, m.position, decoy.position) < 9;
++      const ground = m.position.y <= this.height(m.position.x, m.position.z);
++      if (hit) this.pending.push({ type: 'playerHit', position: pose.position.clone() });
++      else if (decoyHit || ground || m.age > 22) this.pending.push({ type: 'blast', position: m.position.clone() });
++      if (hit || decoyHit || ground || m.age > 22) this.missiles.splice(i, 1);
++    }
++    this.previousPlayer.copy(pose.position);
++  }
++}
+--- a/src/combat/CombatOverlay.ts
++++ b/src/combat/CombatOverlay.ts
+@@ -14,6 +14,8 @@
+   private radar = document.createElement('canvas');
+   private timer = 0;
+   private lockBar = document.createElement('progress');
++  private threat = document.createElement('div');
++  private flareButton = document.createElement('button');
+ 
+   constructor(private game: Game, private sim: CombatSimulation) {
+     this.root.className = 'combat-overlay';
+@@ -24,7 +26,10 @@
+     hint.textContent = 'Derecho apunta · Izquierdo misil · R objetivo · Supr cañón';
+     this.lockBar.className = 'combat-lock'; this.lockBar.max = 1;
+     this.lockBar.setAttribute('aria-label', 'Progreso de bloqueo del misil');
+-    panel.append(title, this.status, this.lockBar, this.inventory, hint);
++    this.threat.className = 'combat-threat'; this.threat.setAttribute('role', 'status');
++    this.flareButton.className = 'combat-flare-button'; this.flareButton.textContent = 'BENGALAS · V / F2';
++    this.flareButton.addEventListener('click', () => game.input.tap('flares'));
++    panel.append(title, this.status, this.lockBar, this.inventory, hint, this.threat, this.flareButton);
+     this.radar.width = this.radar.height = 170; this.radar.className = 'combat-radar';
+     this.radar.setAttribute('aria-label', 'Radar de objetivos de práctica, alcance de 8 km');
+     this.direction.className = 'combat-direction'; this.aim.className = 'combat-aim'; this.aim.textContent = '+';
+@@ -50,11 +55,22 @@
+     this.lockBar.value = sim.lockProgress;
+     this.lockBar.classList.toggle('locked', lock);
+     this.inventory.textContent = `MISILES ${sim.missiles}/6   CAÑÓN ${sim.cannonAmmo}   BENGALAS ${sim.flares}   OBJETIVOS ${sim.hits}/6`;
++    const defense = sim.defense;
++    const incoming = defense.missiles.filter(m => m.decoyId === null);
++    const nearest = Math.min(...incoming.map(m => m.position.distanceTo(g.player.renderPos)));
++    this.threat.classList.toggle('incoming', incoming.length > 0);
++    this.threat.hidden = !defense.enabled;
++    this.threat.textContent = incoming.length ? `¡MISIL IR! ${(nearest / 1000).toFixed(1)} km · V bengalas + maniobra`
++      : !sim.targets[4].alive ? 'ANTIAÉREO DESTRUIDO'
++      : defense.missiles.length ? 'MISIL DESVIADO · Mantén la evasión'
++      : defense.lockProgress > 0 ? `ANTIAÉREO IR · ADQUIRIENDO ${Math.round(defense.lockProgress * 100)}%`
++      : defense.rounds === 0 ? 'ANTIAÉREO SIN MUNICIÓN' : 'SIN AMENAZA · Fuera de alcance o con cobertura';
++    this.flareButton.disabled = sim.flares < 2 || g.aircraft.gear.weightOnWheels || g.aircraft.damage.destroyed;
+     const width = innerWidth, height = innerHeight;
+     let selectedOnscreen = false;
+     for (const t of sim.targets) {
+       const marker = this.markers[t.id];
+-      const p = this.project(t.position);
++      const p = this.project(t.previous.clone().lerp(t.position, g.combat.renderAlpha));
+       const onscreen = t.alive && p.z > -1 && p.z < 1 && Math.abs(p.x) < 0.92 && Math.abs(p.y) < 0.8;
+       marker.hidden = !onscreen;
+       if (!onscreen) continue;
+@@ -70,7 +86,7 @@
+       const rel = selected.position.clone().sub(g.aircraft.position).applyQuaternion(g.aircraft.quaternion.clone().invert());
+       this.direction.textContent = `${rel.z > 0 ? '↶ DETRÁS' : rel.x < 0 ? '← IZQUIERDA' : 'DERECHA →'} · ${selected.name} · ${(distance / 1000).toFixed(1)} km`;
+     }
+-    const boresight = g.aircraft.position.clone().add(new Vector3(0, 0, -2000).applyQuaternion(g.aircraft.quaternion));
++    const boresight = g.player.renderPos.clone().add(new Vector3(0, 0, -2000).applyQuaternion(g.player.renderQuat));
+     const aim = this.project(boresight);
+     this.aim.hidden = aim.z <= -1 || aim.z >= 1 || Math.abs(aim.x) > 1 || Math.abs(aim.y) > 1;
+     this.aim.style.left = `${(aim.x * 0.5 + 0.5) * width}px`;
+@@ -106,6 +122,13 @@
+       else { ctx.beginPath(); ctx.arc(x, y, 2.7, 0, Math.PI * 2); ctx.fill(); }
+       if (selected) { ctx.strokeStyle = '#b8ffbc'; ctx.strokeRect(x - 6, y - 6, 12, 12); }
+     }
++    ctx.fillStyle = '#ff796c';
++    for (const m of this.sim.defense.missiles) {
++      const p = m.position.clone().sub(this.game.player.renderPos).applyQuaternion(inverse);
++      if (Math.hypot(p.x, p.z) > 8000) continue;
++      const x = 85 + p.x / 8000 * 76, y = 85 + p.z / 8000 * 76;
++      ctx.beginPath(); ctx.moveTo(x, y - 4); ctx.lineTo(x - 4, y + 4); ctx.lineTo(x + 4, y + 4); ctx.closePath(); ctx.fill();
++    }
+     ctx.font = '10px monospace'; ctx.textAlign = 'center'; ctx.fillStyle = '#a5c6b5'; ctx.fillText('8 km · AIRE / TIERRA', 85, 169);
+   }
+ }
+--- a/src/combat/CombatSimulation.ts
++++ b/src/combat/CombatSimulation.ts
+@@ -1,5 +1,6 @@
+ // Arcade training weapons. Independent of rendering, audio and the DOM.
+ import { Quaternion, Vector3 } from 'three';
++import { AirDefenseSimulation } from './AirDefenseSimulation.ts';
+ 
+ export interface CombatPose {
+   position: Vector3;
+@@ -16,6 +17,7 @@
+   position: Vector3;
+   velocity: Vector3;
+   alive: boolean;
++  previous: Vector3;
+   radius: number;
+   health: number;
+ }
+@@ -32,7 +34,6 @@
+ export type CombatEvent =
+   | { type: 'launch'; projectile: Projectile }
+   | { type: 'impact'; position: Vector3; destroyed: boolean; name: string }
+-  | { type: 'flare'; position: Vector3; velocity: Vector3 }
+   | { type: 'lock' }
+   | { type: 'complete' };
+ 
+@@ -49,6 +50,7 @@
+ }
+ 
+ export class CombatSimulation {
++  readonly defense: AirDefenseSimulation;
+   readonly targets: Target[] = [];
+   readonly projectiles: Projectile[] = [];
+   readonly pending: CombatEvent[] = [];
+@@ -67,12 +69,13 @@
+   private flareCooldown = 0;
+   private complete = false;
+   private height: (x: number, z: number) => number;
+-  constructor(height: (x: number, z: number) => number) { this.height = height; }
++  constructor(height: (x: number, z: number) => number) { this.height = height; this.defense = new AirDefenseSimulation(height); }
+ 
+   get selected(): Target | undefined { return this.targets.find(t => t.id === this.selectedId && t.alive); }
+   get locked(): boolean { return this.lockProgress >= 1; }
+ 
+   reset(pose: CombatPose): void {
++    this.defense.reset(pose);
+     this.forward.set(0, 0, -1).applyQuaternion(pose.quaternion).setY(0).normalize();
+     this.right.set(-this.forward.z, 0, this.forward.x);
+     this.targets.length = this.projectiles.length = this.pending.length = 0;
+@@ -85,9 +88,9 @@
+       const p = pose.position.clone().addScaledVector(this.forward, air ? 2200 + i * 480 : 6500 + (i - 3) * 210);
+       p.addScaledVector(this.right, air ? (i - 1) * 320 : 2400 + (i - 4) * 220);
+       p.y = air ? Math.max(pose.position.y, this.height(p.x, p.z) + 650) + i * 55 : this.height(p.x, p.z) + 4;
+-      this.targets.push({ id: i, name: air ? `DRON ${i + 1}` : ['RADAR', 'VEHÍCULO', 'DEPÓSITO'][i - 3], kind: air ? 'air' : 'ground',
++      this.targets.push({ id: i, name: air ? `DRON ${i + 1}` : ['RADAR', 'ANTIAÉREO IR', 'DEPÓSITO'][i - 3], kind: air ? 'air' : 'ground',
+         origin: p.clone(), position: p, velocity: air ? this.forward.clone().multiplyScalar(125) : new Vector3(),
+-        alive: true, radius: air ? 16 : 15, health: 1 });
++        previous: p.clone(), alive: true, radius: air ? 16 : 15, health: 1 });
+     }
+   }
+ 
+@@ -139,7 +142,7 @@
+     for (const side of [-1, 1]) {
+       const position = new Vector3(side * 1.5, -0.5, 4).applyQuaternion(pose.quaternion).add(pose.position);
+       const velocity = new Vector3(side * 22, -12, 35).applyQuaternion(pose.quaternion).add(pose.velocity);
+-      this.pending.push({ type: 'flare', position, velocity });
++      this.defense.deploy(position, velocity);
+     }
+     this.flares -= 2; this.flareCooldown = 0.6;
+     return true;
+@@ -151,6 +154,7 @@
+     this.cannonCooldown = Math.max(0, this.cannonCooldown - dt);
+     this.flareCooldown = Math.max(0, this.flareCooldown - dt);
+     for (const t of this.targets) {
++      t.previous.copy(t.position);
+       if (!t.alive || t.kind !== 'air') continue;
+       const phase = this.time * 0.16 + t.id;
+       const heightBefore = t.position.y;
+@@ -197,5 +201,6 @@
+     if (!this.complete && this.targets.length > 0 && this.targets.every(t => !t.alive)) {
+       this.complete = true; this.pending.push({ type: 'complete' });
+     }
+-  }
+-}
++    this.defense.step(dt, pose, this.targets[4]);
++  }
++}
+--- a/src/combat/CombatSystem.ts
++++ b/src/combat/CombatSystem.ts
+@@ -19,7 +19,6 @@
+   private targetGroups = new Map<number, Group>();
+   private shotGroups = new Map<number, Group>();
+   private wrecks: { position: Vector3; time: number }[] = [];
+-  private flareBodies: { position: Vector3; velocity: Vector3; age: number }[] = [];
+   private smoke: ParticleSystem;
+   private fire: ParticleSystem;
+   private sparks: ParticleSystem;
+@@ -31,6 +30,14 @@
+   private tracerGeometry = new CylinderGeometry(0.07, 0.07, 12, 5);
+   private tracerMaterial = new MeshBasicMaterial({ color: new Color(8, 4, 0.6), toneMapped: false });
+   private radarDish: Mesh | null = null;
++  private launcherTurret: Group | null = null;
++  private launcherElevation: Group | null = null;
++  private launcherRounds: Group[] = [];
++  private warningClock = 0;
++  private flareGroups = new Map<number, Mesh>();
++  private flareGeometry = new SphereGeometry(0.2, 6, 4);
++  private flareMaterial = new MeshBasicMaterial({ color: new Color(18, 12, 3), toneMapped: false });
++  get renderAlpha(): number { return this.accumulator * 60; }
+   private aimReturnMode: CameraMode | null = null;
+   private silver = worldMaterial(new MeshStandardMaterial({ color: 0xb7bdba, roughness: 0.36, metalness: 0.5 }), { key: 'combat-metal' });
+   private olive = worldMaterial(new MeshStandardMaterial({ color: 0x697052, roughness: 0.85,
+@@ -57,6 +64,11 @@
+       this.mounted.push(mount);
+     }
+     this.overlay = new CombatOverlay(game, this.sim);
++    for (const side of [-1, 1]) {
++      const dispenser = new Mesh(new BoxGeometry(0.26, 0.16, 0.5), this.rubber);
++      dispenser.position.set(side * 1.5, -0.5, 4);
++      game.player.model.root.add(dispenser);
++    }
+     this.reset();
+   }
+ 
+@@ -69,7 +81,9 @@
+   reset(): void {
+     this.sim.reset(this.pose());
+     for (const group of this.shotGroups.values()) group.removeFromParent();
+-    this.shotGroups.clear(); this.wrecks.length = this.flareBodies.length = 0;
++    this.shotGroups.clear(); this.wrecks.length = 0;
++    for (const mesh of this.flareGroups.values()) mesh.removeFromParent();
++    this.flareGroups.clear(); this.warningClock = 0;
+     this.smoke.clear(); this.fire.clear(); this.sparks.clear();
+     this.accumulator = this.particleClock = 0;
+     this.mounted.forEach(m => m.visible = true);
+@@ -92,8 +106,10 @@
+       if (reason) events.emit('message', { text: reason, kind: 'warn' });
+     }
+     if (input.pressed('flares')) {
+-      if (this.sim.deployFlares(this.pose())) events.emit('message', { text: 'Bengalas de práctica desplegadas', duration: 2 });
+-      else events.emit('message', { text: 'Bengalas disponibles en vuelo; espera entre ráfagas.', kind: 'warn', duration: 2 });
++      if (this.sim.deployFlares(this.pose())) {
++        events.emit('message', { text: 'BENGALAS IR DESPLEGADAS', duration: 2 });
++        events.emit('weapon:flare', {});
++      } else events.emit('message', { text: this.sim.flares === 0 ? 'Sin bengalas. Retroceso para recargar.' : 'Bengalas disponibles en vuelo; espera entre ráfagas.', kind: 'warn', duration: 2 });
+     }
+     if (input.isHeld('fireCannon')) this.sim.cannon(this.pose());
+   }
+@@ -134,16 +150,29 @@
+       for (const t of this.sim.targets) {
+         const group = this.targetGroups.get(t.id)!;
+         group.visible = t.alive;
+-        group.position.copy(t.position);
++        group.position.lerpVectors(t.previous, t.position, this.renderAlpha);
+         if (t.kind === 'air') group.quaternion.setFromUnitVectors(FORWARD, t.velocity.clone().normalize());
+       }
+       if (this.radarDish) this.radarDish.rotation.y += dt * 0.7;
++      if (this.launcherTurret && this.launcherElevation && this.sim.defense.enabled) {
++        const direction = this.game.player.renderPos.clone().sub(this.sim.targets[4].position);
++        this.launcherTurret.rotation.y = Math.atan2(-direction.x, -direction.z);
++        this.launcherElevation.rotation.x = Math.atan2(direction.y - 4, Math.hypot(direction.x, direction.z));
++      }
++      this.launcherRounds.forEach((round, i) => round.visible = i < this.sim.defense.rounds);
++      this.consumeDefenseEvents();
++      const incoming = this.sim.defense.missiles.some(m => m.decoyId === null);
++      this.warningClock -= dt;
++      if (incoming && this.warningClock <= 0) {
++        events.emit('weapon:threat', { incoming: true }); this.warningClock = 1;
++      }
+       this.updateShots(puff);
+-      for (let i = this.flareBodies.length - 1; i >= 0; i--) {
+-        const f = this.flareBodies[i]; f.age += dt;
+-        f.velocity.multiplyScalar(Math.exp(-dt * 0.6)); f.velocity.y -= dt * 9.8;
+-        f.position.addScaledVector(f.velocity, dt);
+-        if (f.age > 4 || f.position.y < this.game.env.height(f.position.x, f.position.z)) { this.flareBodies.splice(i, 1); continue; }
++      const liveFlares = new Set(this.sim.defense.flares.map(f => f.id));
++      for (const [id, mesh] of this.flareGroups) if (!liveFlares.has(id)) { mesh.removeFromParent(); this.flareGroups.delete(id); }
++      for (const f of this.sim.defense.flares) {
++        let mesh = this.flareGroups.get(f.id);
++        if (!mesh) { mesh = new Mesh(this.flareGeometry, this.flareMaterial); this.game.scene.add(mesh); this.flareGroups.set(f.id, mesh); }
++        mesh.position.copy(f.position); mesh.scale.setScalar(Math.max(0.25, 1 - f.age / 4));
+         if (puff) {
+           this.fire.emit(f.position, new Vector3(), 2.2, 0.5, 0.18, new Color(14, 9, 2), 1);
+           this.smoke.emit(f.position, new Vector3(), 1.4, 2.5, 2.6, new Color(0.7, 0.7, 0.68), 0.5);
+@@ -178,25 +207,46 @@
+           events.emit('message', { text: `${e.name} ALCANZADO · ${this.sim.hits}/6`, kind: 'good', duration: 3 });
+           if (e.position.y - this.game.env.height(e.position.x, e.position.z) < 30) this.wrecks.push({ position: e.position, time: 0 });
+         }
+-      } else if (e.type === 'flare') this.flareBodies.push({ position: e.position, velocity: e.velocity, age: 0 });
+-      else if (e.type === 'lock') events.emit('weapon:lock', {});
++      } else if (e.type === 'lock') events.emit('weapon:lock', {});
+       else events.emit('message', { text: 'PRÁCTICA COMPLETADA · 6/6 objetivos. Retroceso para repetir.', kind: 'good', duration: 8 });
+     }
+   }
+ 
++  private consumeDefenseEvents(): void {
++    for (const e of this.sim.defense.pending.splice(0)) {
++      if (e.type === 'tracking') {
++        events.emit('message', { text: 'ANTIAÉREO IR ADQUIRIENDO · Busca cobertura o destruye el lanzador.', kind: 'warn', duration: 4 });
++        events.emit('weapon:threat', { incoming: false });
++      } else if (e.type === 'launch') {
++        events.emit('message', { text: '¡MISIL ENTRANTE! · V / F2 bengalas · Maniobra para evadir.', kind: 'warn', duration: 5 });
++        events.emit('weapon:launch', { kind: 'missile' });
++      } else if (e.type === 'decoy') {
++        events.emit('message', { text: 'MISIL DESVIADO POR BENGALAS', kind: 'good', duration: 3 });
++      } else if (e.type === 'playerHit') {
++        const damage = this.game.aircraft.damage;
++        damage.apply('fuselage', 0.55); damage.apply('engine', 0.28); damage.apply('tail', 0.2);
++        if (damage.health.fuselage <= 0.05) damage.destroy('misil antiaéreo');
++        this.explode(e.position, 0.5);
++        events.emit('weapon:impact', { position: e.position.toArray() as [number, number, number] });
++        events.emit('message', { text: 'IMPACTO ANTIAÉREO · Avión dañado. Retroceso para reiniciar.', kind: 'warn', duration: 5 });
++      } else this.explode(e.position, 0.25);
++    }
++  }
++
+   private updateShots(puff: boolean): void {
+-    const live = new Set(this.sim.projectiles.map(p => p.id));
++    const projectiles = [...this.sim.projectiles, ...this.sim.defense.missiles];
++    const live = new Set(projectiles.map(p => p.id));
+     for (const [id, group] of this.shotGroups) if (!live.has(id)) { group.removeFromParent(); this.shotGroups.delete(id); }
+-    for (const p of this.sim.projectiles) {
++    for (const p of projectiles) {
+       let group = this.shotGroups.get(p.id);
+       if (!group) {
+-        group = p.kind === 'missile' ? this.missileTemplate.clone() : new Group();
++        group = p.kind !== 'cannon' ? this.missileTemplate.clone() : new Group();
+         if (p.kind === 'cannon') { const mesh = new Mesh(this.tracerGeometry, this.tracerMaterial); mesh.rotation.x = Math.PI / 2; group.add(mesh); }
+         this.game.scene.add(group); this.shotGroups.set(p.id, group);
+       }
+-      group.position.copy(p.position);
++      group.position.lerpVectors(p.previous, p.position, this.renderAlpha);
+       group.quaternion.setFromUnitVectors(FORWARD, p.velocity.clone().normalize());
+-      if (p.kind === 'missile' && puff && p.age < 7) {
++      if (p.kind !== 'cannon' && puff && p.age < (p.kind === 'sam' ? 18 : 7)) {
+         // Fill the interval between frames rather than a dotted smoke trail.
+         const length = p.velocity.length() / 30;
+         const count = Math.ceil(length / 3);
+@@ -262,15 +312,23 @@
+       const dish = new Mesh(new SphereGeometry(5, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), this.silver);
+       dish.position.y = 12; dish.rotation.x = Math.PI * 0.7; g.add(dish); this.radarDish = dish;
+     } else if (t.id === 4) {
+-      const canvas = worldMaterial(new MeshStandardMaterial({ color: 0x777653, roughness: 0.96,
+-        map: libTexture('canvas', 'albedo', [3, 2]), normalMap: libTexture('canvas', 'normal', [3, 2]) }), { key: 'range-canvas' });
+       const glass = worldMaterial(new MeshStandardMaterial({ color: 0x273e40, metalness: 0.2, roughness: 0.14 }), { key: 'range-glass' });
+       box(4.5, 2, 11, 0, -0.8, 0); box(4.2, 2.5, 3, 0, 1.6, -3.5);
+       box(4, 0.8, 1.7, 0, 0.35, -5.4); box(4.7, 0.35, 0.4, 0, -0.65, -6.3, this.rubber);
+       box(3.5, 1.1, 0.1, 0, 2, -5.05, glass);
+       box(0.08, 1.2, 0.15, 0, 2, -5.15, this.olive);
+-      box(4, 2.8, 6.4, 0, 1.5, 1.55, canvas);
+-      for (const z of [-1.4, 0, 1.5, 3, 4.5]) box(4.05, 0.1, 0.09, 0, 2.95, z, this.olive);
++      box(4.3, 0.4, 6.4, 0, 0.8, 1.5);
++      const turret = new Group(); turret.position.set(0, 1.4, 1.8); g.add(turret);
++      const base = new Mesh(new CylinderGeometry(1.1, 1.3, 0.7, 16), this.olive); turret.add(base);
++      const elevation = new Group(); elevation.position.y = 1; turret.add(elevation);
++      const axle = new Mesh(new BoxGeometry(3.2, 0.4, 0.5), this.silver); elevation.add(axle);
++      for (const x of [-1.2, 1.2]) for (const y of [0, 0.8]) {
++        const tube = new Mesh(new CylinderGeometry(0.36, 0.36, 3.7, 12, 1, true), this.olive);
++        tube.rotation.x = Math.PI / 2; tube.position.set(x, y, 0); elevation.add(tube);
++        const round = this.missileTemplate.clone(); round.scale.setScalar(0.82); round.position.set(x, y, 0); elevation.add(round); this.launcherRounds.push(round);
++      }
++      const sensor = new Mesh(new BoxGeometry(0.65, 0.55, 0.8), this.rubber); sensor.position.set(0, 0.7, -0.4); elevation.add(sensor);
++      this.launcherTurret = turret; this.launcherElevation = elevation;
+       for (const x of [-1.65, 1.65]) {
+         box(0.65, 0.35, 0.13, x, 0.55, -6.3, this.silver);
+         box(0.7, 0.17, 1.5, x * 1.42, -1, -3.3, this.silver);
+@@ -290,6 +348,8 @@
+       const band = new Mesh(new TorusGeometry(7.1, 0.2, 4, 20), this.orange); band.rotation.x = Math.PI / 2; band.position.y = 3; g.add(band);
+       box(0.35, 7, 0.35, -6, 1, -5, this.silver);
+     }
++    // Bring the vehicle's tyres onto the concrete pad.
++    if (t.id === 4) for (const child of g.children) if (child !== pad) child.position.y -= 0.75;
+     // Range boundary posts and warning stripes add scale without expensive assets.
+     for (const x of [-20, 20]) for (const z of [-20, 20]) {
+       box(0.3, 3, 0.3, x, -2.2, z, this.orange);
+--- a/src/combat/combat.css
++++ b/src/combat/combat.css
+@@ -8,6 +8,11 @@
+ .combat-overlay.aiming .combat-aim{font-size:30px;opacity:1}.combat-overlay.aiming .combat-panel{border-left-color:#ffe4a2}
+ .combat-inventory{font-size:10px;word-spacing:2px;margin-top:3px}
+ .combat-hint{font:12px/1.5 system-ui,sans-serif;color:#adc0b5;margin-top:4px}
++.combat-threat{font:12px/1.5 monospace;color:#eec589;margin-top:8px;max-width:340px}
++.combat-threat.incoming{color:#ff968b;font-weight:bold}
++.combat-flare-button{pointer-events:auto;cursor:pointer;background:#20372b;border:1px solid #64876f;color:#d9ecde;padding:6px 10px;font:11px monospace;margin-top:6px}
++.combat-flare-button:hover,.combat-flare-button:focus-visible{background:#34513f;outline:2px solid #b8ffbc;outline-offset:2px}
++.combat-flare-button:disabled{opacity:.45;cursor:default}
+ .combat-radar{position:absolute;right:18px;top:16px;width:170px;height:170px}
+ .combat-target{position:absolute;left:0;top:0;width:0;height:0;color:#c9e9d4;text-shadow:0 1px 3px #000;font:10px/1.4 monospace;white-space:nowrap}
+ .combat-bracket{position:absolute;left:-12px;top:-12px;width:24px;height:24px;border:1px solid currentColor;opacity:.6}
+--- a/src/core/EventBus.ts
++++ b/src/core/EventBus.ts
+@@ -5,6 +5,8 @@
+   'weapon:launch': { kind: 'missile' | 'cannon' };
+   'weapon:impact': { position: [number, number, number] };
+   'weapon:lock': {};
++  'weapon:threat': { incoming: boolean };
++  'weapon:flare': {};
+   'switch': { id: string; kind: 'toggle' | 'button' | 'rotary' | 'lever' | 'guard'; value: number };
+   'gear:transit': { down: boolean };
+   'gear:locked': { down: boolean };
+--- a/src/core/Game.ts
++++ b/src/core/Game.ts
+@@ -249,6 +249,7 @@
+     this.accumulator = 0;
+     this.missionTime = 0;
+     this.cameras.centerView();
++    p.cockpit.hud.reset();
+     events.emit('respawn', {});
+     this.combat?.reset();
+   }
+@@ -514,7 +515,7 @@
+     ck.mfdR.update(dt, ctx, main);
+     ck.standby.update(dt, ph, ess);
+     ck.hud.exposure = this.pipeline.params.exposure;
+-    ck.hud.update({ ac: ph, waypoint: null, warnings: p.warnings, units: this.settings.units, mode: p.hudMode, time: globals.uTime.value }, p.renderQuat, main && inCockpit);
++    ck.hud.update({ ac: ph, waypoint: null, warnings: p.warnings, units: this.settings.units, mode: p.hudMode, time: globals.uTime.value, dt: this.paused ? 0 : dt }, p.renderQuat, main && inCockpit, this.camera.quaternion);
+   }
+ 
+   private updatePost(dt: number, inCockpit: boolean): void {
+--- a/src/input/InputSystem.ts
++++ b/src/input/InputSystem.ts
+@@ -55,6 +55,7 @@
+   Enter: ['fireMissile'],
+   Delete: ['fireCannon'],
+   F2: ['flares'],
++  KeyV: ['flares'],
+   Backquote: ['debug'],
+   F3: ['debug'],
+   F4: ['debugVectors'],
+@@ -73,7 +74,7 @@
+   Period: ['trimUp'],
+   KeyT: ['timeForward'],
+   KeyY: ['weatherNext'],
+-  KeyV: ['centerView'],
++  Home: ['centerView'],
+   KeyM: ['map'],
+   KeyI: ['lookBack'],
+   Backspace: ['respawn'],
+@@ -216,6 +217,9 @@
+   pressed(a: ButtonAction): boolean {
+     return this.pressedQueue.has(a);
+   }
++
++  /** Queue a UI button through the same gated path as keyboard input. */
++  tap(a: ButtonAction): void { this.pressedQueue.add(a); }
+ 
+   isHeld(a: ButtonAction): boolean {
+     return this.held.has(a);
+@@ -380,7 +384,7 @@
+   ['Enter', 'Lanzar misil cuando el objetivo esté BLOQUEADO'],
+   ['R', 'Seleccionar siguiente objetivo de práctica'],
+   ['Supr', 'Cañón (mantener pulsado, en vuelo)'],
+-  ['F2', 'Bengalas de práctica (efecto visual)'],
++  ['V / F2', 'Bengalas IR: dos por ráfaga. Úsalas con un misil cercano y maniobra.'],
+   ['W / S', 'Pitch (S = pull)'],
+   ['A / D', 'Roll'],
+   ['Q / E', 'Yaw / nose-wheel steering'],
+@@ -399,7 +403,7 @@
+   ['C, 1-6', 'Cameras'],
+   ['Mouse', 'Free look (click to capture), wheel = zoom'],
+   ['LMB', 'Press cockpit control under gaze / cursor'],
+-  ['V', 'Center view'],
++  ['Inicio', 'Centrar la vista'],
+   ['I', 'Look back'],
+   ['[ / ]', 'Cycle left / right MFD page'],
+   ['M', 'Map page on right MFD'],
+--- a/src/ui/UI.ts
++++ b/src/ui/UI.ts
+@@ -55,8 +55,8 @@
+     const cards = el('div', 'ui-cards', panel);
+     const practice = el('button', 'ui-card ui-training', cards) as HTMLButtonElement;
+     el('div', 'ui-card-title', practice, 'PRÁCTICA DE COMBATE');
+-    el('div', 'ui-card-text', practice, 'Empieza en vuelo con 6 misiles y 6 objetivos. Mantén clic derecho para apuntar y pulsa el izquierdo cuando aparezca BLOQUEADO. R cambia de objetivo.');
+-    practice.addEventListener('click', () => { this.fly('air'); game.cameras.setMode('COCKPIT'); });
++    el('div', 'ui-card-text', practice, '6 misiles, 6 objetivos y una batería antiaérea activa. Derecho apunta · Izquierdo dispara · R cambia de objetivo · V / F2 lanza bengalas contra misiles entrantes.');
++    practice.addEventListener('click', () => { this.fly('air'); game.combat.sim.defense.enabled = true; game.cameras.setMode('COCKPIT'); });
+     const spawns: [SpawnKind, string, string][] = [
+       ['cold', 'COLD &amp; DARK', 'On the apron, canopy open, every system off. Start it from the switches — or press O.'],
+       ['ready', 'READY FOR TAKEOFF', 'Lined up on the runway, engine at idle, flaps TO, parking brake set.'],
+@@ -170,6 +170,7 @@
+   private fly(kind: SpawnKind): void {
+     const g = this.game;
+     g.audio.start();
++    g.combat.sim.defense.enabled = false;
+     g.spawn(kind);
+     if (!this.started) g.cameras.setMode(this.startCamera);
+     this.started = true;
+--- /dev/null
++++ b/tests/camera.test.ts
+@@ -0,0 +1,28 @@
++import assert from 'node:assert/strict';
++import { PerspectiveCamera, Quaternion, Vector3 } from 'three';
++import { CameraSystem, type CameraTarget } from '../src/camera/CameraSystem.ts';
++
++const t: CameraTarget = { position: new Vector3(90000, 1600, -90000), quaternion: new Quaternion(),
++  velocity: new Vector3(0, 0, -190), omega: new Vector3(), specificForce: new Vector3(0, 9.81, 0),
++  tas: 190, mach: 0.55, vibration: 3, onGround: false };
++let count = 0;
++function test(name: string, fn: () => void) { fn(); count++; console.log(`PASS ${name}`); }
++test('Severe engine vibration does not rotate the cockpit sight and head displacement stays sub-millimetric', () => {
++  const camera = new PerspectiveCamera(72, 16 / 9, 0.1, 100000), system = new CameraSystem(camera);
++  system.update(1 / 60, t); const orientation = camera.quaternion.clone(), eye = camera.position.clone();
++  for (let i = 0; i < 600; i++) {
++    system.update(1 / 60, t);
++    assert.ok(camera.quaternion.angleTo(orientation) < 1e-7);
++    assert.ok(camera.position.distanceTo(eye) < 0.0015);
++  }
++});
++test('Aiming holds a steady sight even with engine vibration and G loads', () => {
++  const camera = new PerspectiveCamera(), system = new CameraSystem(camera); system.aiming = true;
++  const loaded = { ...t, specificForce: new Vector3(20, 60, -10), omega: new Vector3(0, 0, 0.5) };
++  system.update(1 / 60, loaded); const eye = camera.position.clone(), orientation = camera.quaternion.clone();
++  for (let i = 0; i < 240; i++) {
++    system.update(1 / 60, loaded);
++    assert.ok(camera.position.distanceTo(eye) < 1e-8); assert.ok(camera.quaternion.angleTo(orientation) < 1e-7);
++  }
++});
++console.log(`${count} camera checks passed`);
+--- /dev/null
++++ b/tests/defense.test.ts
+@@ -0,0 +1,77 @@
++import assert from 'node:assert/strict';
++import { Quaternion, Vector3 } from 'three';
++import { CombatSimulation, type CombatPose } from '../src/combat/CombatSimulation.ts';
++
++const pose = (): CombatPose => ({ position: new Vector3(0, 1600, 0), quaternion: new Quaternion(),
++  velocity: new Vector3(0, 0, -190), onGround: false, destroyed: false });
++const fresh = (height = (_x: number, _z: number) => 0) => {
++  const p = pose(), sim = new CombatSimulation(height); sim.reset(p); sim.defense.enabled = true;
++  return { p, sim, defense: sim.defense };
++};
++const tick = (sim: CombatSimulation, p: CombatPose, seconds: number) => {
++  for (let i = 0; i < Math.round(seconds * 60); i++) sim.step(1 / 60, p);
++};
++let count = 0;
++function test(name: string, fn: () => void) { fn(); count++; console.log(`PASS ${name}`); }
++
++test('IR battery acquires gradually, gives warning and launches after initial grace period', () => {
++  const { sim, p, defense } = fresh(); tick(sim, p, 1);
++  assert.ok(defense.lockProgress > 0 && defense.lockProgress < 1);
++  assert.equal(defense.pending.filter(e => e.type === 'tracking').length, 1);
++  tick(sim, p, 6); assert.equal(defense.missiles.length, 0);
++  tick(sim, p, 1.2); assert.equal(defense.missiles.length, 1); assert.equal(defense.rounds, 3);
++  tick(sim, p, 3); assert.equal(defense.pending.filter(e => e.type === 'launch').length, 1);
++});
++test('Free flight, ground, destroyed aircraft and terrain cover prevent SAM launches', () => {
++  for (const mode of ['free', 'ground', 'destroyed', 'terrain']) {
++    const { sim, p, defense } = fresh(mode === 'terrain' ? (_x, z) => z < -2000 && z > -4000 ? 2600 : 0 : undefined);
++    if (mode === 'free') defense.enabled = false;
++    if (mode === 'ground') p.onGround = true;
++    if (mode === 'destroyed') p.destroyed = true;
++    tick(sim, p, 20); assert.equal(defense.missiles.length, 0, mode); assert.equal(defense.lockProgress, 0, mode);
++  }
++});
++test('Uncountered missile reaches the aircraft and reports a hit', () => {
++  const { sim, p, defense } = fresh(); tick(sim, p, 30);
++  assert.ok(defense.pending.some(e => e.type === 'playerHit'));
++});
++test('Flares deployed too early expire and do not grant blanket invulnerability', () => {
++  const { sim, p, defense } = fresh(); assert.ok(sim.deployFlares(p)); tick(sim, p, 30);
++  assert.equal(defense.flares.length, 0); assert.ok(defense.pending.some(e => e.type === 'playerHit'));
++  assert.equal(defense.pending.some(e => e.type === 'decoy'), false);
++});
++test('Timely flares divert an approaching missile and a moving aircraft survives', () => {
++  const { sim, p, defense } = fresh();
++  let deployed = false, diverted = false;
++  for (let i = 0; i < 60 * 23; i++) {
++    p.position.addScaledVector(p.velocity, 1 / 60);
++    const incoming = defense.missiles.find(m => m.decoyId === null);
++    if (!deployed && incoming && incoming.position.distanceTo(p.position) < 1600) {
++      assert.ok(sim.deployFlares(p)); deployed = true;
++    }
++    sim.step(1 / 60, p);
++    diverted ||= defense.pending.some(e => e.type === 'decoy');
++    if (diverted && defense.missiles.length === 0) break;
++  }
++  assert.ok(deployed && diverted); assert.equal(sim.flares, 22);
++  assert.equal(defense.pending.some(e => e.type === 'playerHit'), false);
++  assert.equal(defense.missiles.length, 0);
++});
++test('Destroying the launcher prevents new shots while existing missiles remain live', () => {
++  const { sim, p, defense } = fresh(); tick(sim, p, 8.2); sim.targets[4].alive = false;
++  assert.equal(defense.missiles.length, 1); tick(sim, p, 30);
++  assert.equal(defense.pending.filter(e => e.type === 'launch').length, 1); assert.equal(defense.lockProgress, 0);
++});
++test('Swept missile collision handles an aircraft crossing between frames', () => {
++  const { sim, p, defense } = fresh(); defense.enabled = false;
++  defense.missiles.push({ id: 8000, kind: 'sam', position: p.position.clone().add(new Vector3(0, 0, -5)),
++    previous: p.position.clone(), velocity: new Vector3(0, 0, 480), age: 0, decoyId: null });
++  sim.step(1 / 60, p); assert.equal(defense.missiles.length, 0);
++  assert.ok(defense.pending.some(e => e.type === 'playerHit'));
++});
++test('Reset removes hostile missiles, hot decoys, warnings and restores ammunition', () => {
++  const { sim, p, defense } = fresh(); tick(sim, p, 8.2); sim.deployFlares(p); sim.reset(p);
++  assert.equal(defense.missiles.length, 0); assert.equal(defense.flares.length, 0);
++  assert.equal(defense.pending.length, 0); assert.equal(defense.rounds, 4); assert.equal(sim.flares, 24);
++});
++console.log(`${count} defense checks passed`);
