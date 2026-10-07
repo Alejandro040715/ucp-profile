@@ -3,4 +3,28 @@
 
 export type TexMap = 'albedo' | 'normal' | 'roughness' | 'ao' | 'metalness' | 'height' | 'mask' | 'opacity';
 
-export const TEXTURE_MANIFEST: Record<string, TexMap[]> = {};
+export const TEXTURE_MANIFEST: Record<string, TexMap[]> = {
+  'brushed-alu': ['albedo', 'normal', 'roughness'],
+  'canvas': ['albedo', 'normal', 'roughness'],
+  'chrome': ['roughness'],
+  'dirt-specks': ['mask'],
+  'edge-wear': ['normal', 'mask'],
+  'glass-dust': ['mask'],
+  'glass-fingerprints': ['mask'],
+  'glass-scratches': ['mask'],
+  'grime': ['mask'],
+  'leather': ['albedo', 'normal', 'roughness'],
+  'nozzle-steel': ['albedo', 'normal', 'roughness', 'metalness'],
+  'paint-chips': ['normal', 'mask'],
+  'paint-grain': ['normal', 'roughness'],
+  'plastic': ['normal', 'roughness'],
+  'ram-coating': ['normal', 'roughness'],
+  'rubber': ['albedo', 'normal', 'roughness'],
+  'scratches': ['normal', 'mask'],
+  'smudge': ['mask'],
+  'titanium': ['albedo', 'normal', 'roughness'],
+  'tread-plate': ['normal', 'roughness'],
+  'twill': ['albedo', 'normal', 'roughness'],
+  'water-stains': ['mask'],
+  'webbing': ['albedo', 'normal', 'roughness'],
+};

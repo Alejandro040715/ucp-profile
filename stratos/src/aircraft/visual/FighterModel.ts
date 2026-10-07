@@ -15,6 +15,8 @@ import {
 import { paintFuselage, paintPanelAtlas, paintNozzle, SCHEMES, type MaterialMaps, type PaintScheme } from './FighterTextures.ts';
 import { createCanopyMaterial } from './CanopyMaterial.ts';
 import { worldMaterial } from '../../render/Materials.ts';
+import { surfaceDetailHook, surfaceDetailKey, type SurfaceDetailOptions } from '../../render/SurfaceDetail.ts';
+import { libTexture } from '../../assets/TextureLibrary.ts';
 import { sunOcclusionHook } from '../../world/TerrainMaterial.ts';
 import { AircraftConfig } from '../AircraftConfig.ts';
 import { DEG } from '../../core/math.ts';
@@ -84,7 +86,24 @@ function paintMaterial(maps: MaterialMaps, key: string): MeshStandardMaterial {
     envMapIntensity: 1.0,
   });
   m.normalScale.set(1, 1);
-  return worldMaterial(m, { key: 'paint' + key, hooks: [sunOcclusionHook] });
+  // scanned paint micro-surface (orange peel / grain) at physical scale
+  const detail: SurfaceDetailOptions = {
+    normal: libTexture('paint-grain', 'normal'),
+    normalTile: 0.32,
+    normalStrength: 0.22,
+    rough: libTexture('paint-grain', 'roughness'),
+    roughTile: 0.45,
+    roughLo: 0.9,
+    roughHi: 1.12,
+  };
+  return worldMaterial(m, { key: 'paint' + key + surfaceDetailKey(detail), hooks: [sunOcclusionHook, surfaceDetailHook(detail)] });
+}
+
+/** lit standard material with optional scanned surface detail */
+function litMat(params: ConstructorParameters<typeof MeshStandardMaterial>[0], key: string, detail?: SurfaceDetailOptions): MeshStandardMaterial {
+  const hooks = [sunOcclusionHook];
+  if (detail) hooks.push(surfaceDetailHook(detail));
+  return worldMaterial(new MeshStandardMaterial(params), { hooks, key: detail ? key + surfaceDetailKey(detail) : undefined });
 }
 
 export class FighterModel {
@@ -123,17 +142,55 @@ export class FighterModel {
     nozzleMaps ??= paintNozzle();
     const paintFus = paintMaterial(cached.fus, schemeName + 'f');
     const paintPan = paintMaterial(cached.panels, schemeName + 'p');
-    const dark = worldMaterial(new MeshStandardMaterial({ color: 0x1b1d20, roughness: 0.75, metalness: 0.1 }), { hooks: [sunOcclusionHook] });
-    const intakeInner = worldMaterial(new MeshStandardMaterial({ color: 0x3a3c3f, roughness: 0.8, side: DoubleSide }), { hooks: [sunOcclusionHook] });
-    const frameMat = worldMaterial(new MeshStandardMaterial({ color: 0x2b2e32, roughness: 0.55, metalness: 0.2 }), { hooks: [sunOcclusionHook] });
-    const gearPaint = worldMaterial(new MeshStandardMaterial({ color: 0xc9cbc8, roughness: 0.5, metalness: 0.15 }), { hooks: [sunOcclusionHook] });
-    const chrome = worldMaterial(new MeshStandardMaterial({ color: 0xd8dde2, roughness: 0.12, metalness: 1.0 }), { hooks: [sunOcclusionHook] });
-    const tyre = worldMaterial(new MeshStandardMaterial({ color: 0x141414, roughness: 0.92, metalness: 0 }), { hooks: [sunOcclusionHook] });
-    const hub = worldMaterial(new MeshStandardMaterial({ color: 0x8d9093, roughness: 0.45, metalness: 0.7 }), { hooks: [sunOcclusionHook] });
+    // scanned CC0 detail layers (see public/textures/CREDITS.md)
+    const ram: SurfaceDetailOptions = { normal: libTexture('ram-coating', 'normal'), normalTile: 0.25, normalStrength: 0.6, rough: libTexture('ram-coating', 'roughness'), roughTile: 0.4, roughLo: 0.85, roughHi: 1.15 };
+    const grainOnly: SurfaceDetailOptions = { normal: libTexture('paint-grain', 'normal'), normalTile: 0.25, normalStrength: 0.3, rough: libTexture('smudge', 'mask'), roughTile: 0.6, roughLo: 0.85, roughHi: 1.25 };
+    const dark = litMat({ color: 0x1b1d20, roughness: 0.75, metalness: 0.1 }, 'ram', ram);
+    const intakeInner = litMat({ color: 0x3a3c3f, roughness: 0.8, side: DoubleSide }, 'intake', grainOnly);
+    const frameMat = litMat({ color: 0x2b2e32, roughness: 0.55, metalness: 0.2 }, 'frame', grainOnly);
+    const gearPaint = litMat({ color: 0xc9cbc8, roughness: 0.5, metalness: 0.15 }, 'gearpaint', {
+      ...grainOnly,
+      albedo: libTexture('grime', 'mask'),
+      albedoTile: 0.5,
+      albedoAmount: 0.35,
+    });
+    const chrome = litMat({ color: 0xd8dde2, roughness: 0.14, metalness: 1.0 }, 'chrome', {
+      rough: libTexture('chrome', 'roughness'),
+      roughTile: 0.25,
+      roughLo: 0.5,
+      roughHi: 2.4,
+      normal: libTexture('scratches', 'normal'),
+      normalTile: 0.3,
+      normalStrength: 0.4,
+    });
+    const tyre = litMat({ color: 0x161616, roughness: 0.92, metalness: 0 }, 'tyre', {
+      normal: libTexture('rubber', 'normal'),
+      normalTile: 0.12,
+      normalStrength: 0.9,
+      rough: libTexture('rubber', 'roughness'),
+      roughTile: 0.2,
+      roughLo: 0.85,
+      roughHi: 1.08,
+      albedo: libTexture('rubber', 'albedo'),
+      albedoTile: 0.2,
+      albedoAmount: 0.6,
+    });
+    const hub = litMat({ color: 0x8d9093, roughness: 0.45, metalness: 0.7 }, 'hub', {
+      normal: libTexture('brushed-alu', 'normal'),
+      normalTile: 0.15,
+      normalStrength: 0.6,
+      rough: libTexture('brushed-alu', 'roughness'),
+      roughTile: 0.2,
+      roughLo: 0.7,
+      roughHi: 1.3,
+    });
     const sensorGlass = worldMaterial(new MeshStandardMaterial({ color: 0x3a2a10, roughness: 0.05, metalness: 0.9, emissive: new Color(0.05, 0.03, 0.0) }), { hooks: [sunOcclusionHook] });
     const nozzleMat = worldMaterial(
       new MeshStandardMaterial({ map: nozzleMaps.map, normalMap: nozzleMaps.normalMap, roughnessMap: nozzleMaps.ormMap, metalnessMap: nozzleMaps.ormMap, roughness: 1, metalness: 1 }),
-      { hooks: [sunOcclusionHook], key: 'nozzle' },
+      {
+        hooks: [sunOcclusionHook, surfaceDetailHook({ normal: libTexture('nozzle-steel', 'normal'), normalTile: 0.35, normalStrength: 0.8 })],
+        key: 'nozzle' + (libTexture('nozzle-steel', 'normal') ? 'detN' : ''),
+      },
     );
     this.nozzleGlow = worldMaterial(new MeshStandardMaterial({ color: 0x111111, roughness: 0.8, emissive: new Color(1.0, 0.35, 0.08), emissiveIntensity: 0, side: DoubleSide }), { key: 'glow' });
 
@@ -427,7 +484,8 @@ export class FighterModel {
     // nozzle petals: open = larger exit radius (petals flare outward)
     const flare = -0.08 + 0.2 * s.nozzle;
     for (const p of this.petals) p.rotation.x = flare;
-    this.nozzleGlow.emissiveIntensity = s.heat * 3 + s.ab * 18;
+    // a turbine at idle does not visibly glow; dull red appears only near MIL
+    this.nozzleGlow.emissiveIntensity = Math.pow(s.heat, 2.5) * 1.2 + s.ab * 18;
     this.nozzleGlow.emissive.setRGB(1.0, 0.35 + 0.3 * s.ab, 0.08 + 0.25 * s.ab);
     const abm = this.abCore.material as MeshBasicMaterial;
     abm.opacity = s.ab * 0.9;

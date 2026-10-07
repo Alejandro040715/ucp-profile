@@ -52,7 +52,7 @@ export function surfaceDetailHook(o: SurfaceDetailOptions): ShaderHook {
     const decl = `
 varying vec3 vDetPos;
 varying vec3 vDetN;
-${useN ? 'uniform sampler2D uDetN; uniform float uDetNScale; uniform float uDetNStrength;' : ''}
+${useN ? 'uniform sampler2D uDetN; uniform float uDetNScale; uniform float uDetNStrength; uniform mat3 normalMatrix;' : ''}
 ${useR ? 'uniform sampler2D uDetR; uniform float uDetRScale; uniform vec2 uDetRRange; uniform float uDetRAmount;' : ''}
 ${useA ? 'uniform sampler2D uDetA; uniform float uDetAScale; uniform float uDetAAmount;' : ''}
 vec3 detBlendW(vec3 n) {

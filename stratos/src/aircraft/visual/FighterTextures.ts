@@ -6,6 +6,56 @@
 import { CanvasTexture, LinearMipmapLinearFilter, RepeatWrapping, SRGBColorSpace, LinearSRGBColorSpace, type Texture } from 'three';
 import { rng } from '../../core/math.ts';
 import { COCKPIT, Z_NOSE, Z_TAIL, type PanelSpec } from './FighterGeometry.ts';
+import { texImage, tileImage, type TexMap } from '../../assets/TextureLibrary.ts';
+
+// ---------------------------------------------------------------------------
+// real CC0 weathering masks (ambientCG scans, see public/textures/CREDITS.md)
+// are converted once into tinted alpha stamps and tiled over the paint canvases
+// at their physical scale. Missing images simply skip that layer.
+const stampCache = new Map<string, HTMLCanvasElement>();
+
+/** canvas whose alpha = mask (optionally inverted, contrast-shaped) and colour = tint */
+function maskStamp(slug: string, map: TexMap, tint: [number, number, number], opts: { invert?: boolean; gamma?: number; lo?: number; hi?: number } = {}): HTMLCanvasElement | null {
+  const key = `${slug}/${map}/${tint.join(',')}/${opts.invert ? 1 : 0}/${opts.gamma ?? 1}/${opts.lo ?? 0}/${opts.hi ?? 1}`;
+  const hit = stampCache.get(key);
+  if (hit) return hit;
+  const img = texImage(slug, map);
+  if (!img) return null;
+  const c = document.createElement('canvas');
+  c.width = img.width;
+  c.height = img.height;
+  const g = c.getContext('2d', { willReadFrequently: true })!;
+  g.drawImage(img, 0, 0);
+  const d = g.getImageData(0, 0, c.width, c.height);
+  const lo = opts.lo ?? 0, hi = opts.hi ?? 1, gam = opts.gamma ?? 1;
+  for (let i = 0; i < d.data.length; i += 4) {
+    let v = d.data[i] / 255;
+    if (opts.invert) v = 1 - v;
+    v = Math.min(1, Math.max(0, (v - lo) / Math.max(1e-3, hi - lo)));
+    v = Math.pow(v, gam);
+    d.data[i] = tint[0];
+    d.data[i + 1] = tint[1];
+    d.data[i + 2] = tint[2];
+    d.data[i + 3] = v * 255;
+  }
+  g.putImageData(d, 0, 0);
+  stampCache.set(key, c);
+  return c;
+}
+
+/** Bake one weathering layer into a painter canvas over a rectangle. */
+function weather(
+  ctx: CanvasRenderingContext2D,
+  stamp: HTMLCanvasElement | null,
+  rect: [number, number, number, number],
+  tilePx: number,
+  alpha: number,
+  offset = 0,
+  op: GlobalCompositeOperation = 'source-over',
+): void {
+  if (!stamp || alpha <= 0) return;
+  tileImage(ctx, stamp, rect[0], rect[1], rect[2], rect[3], tilePx, { alpha, op, offsetX: offset * 0.37, offsetY: offset * 0.61 });
+}
 
 export interface PaintScheme {
   top: string;
@@ -439,7 +489,44 @@ export function paintFuselage(scheme: PaintScheme, perimeter: (z: number) => num
     c.fillRect(X(-6.4), Yu(side) - 4, 0.6 * pxPerM, 8);
     c.fillRect(X(5.0), Yu(side) - 4, 0.6 * pxPerM, 8);
   }
-  // --- weathering
+  // --- weathering from real scans (grime, water spots, dirt, smudges, wear)
+  {
+    const full: [number, number, number, number] = [0, 0, W, H];
+    const under: [number, number, number, number] = [0, Yu(0.3), W, Yu(0.4)];
+    const top1: [number, number, number, number] = [0, 0, W, Yu(0.17)];
+    const top2: [number, number, number, number] = [0, Yu(0.83), W, Yu(0.17)];
+    const grime = maskStamp('grime', 'mask', [34, 31, 27], { invert: true, lo: 0.25, hi: 0.95, gamma: 1.3 });
+    weather(c, grime, full, 1.3 * pxPerM, 0.17, 11);
+    weather(c, grime, under, 0.9 * pxPerM, 0.2, 57);
+    const water = maskStamp('water-stains', 'mask', [214, 216, 214], { lo: 0.15, gamma: 1.2 });
+    weather(c, water, top1, 0.42 * pxPerM, 0.09, 3);
+    weather(c, water, top2, 0.42 * pxPerM, 0.09, 29);
+    const dirt = maskStamp('dirt-specks', 'mask', [38, 33, 26], { lo: 0.2 });
+    weather(c, dirt, under, 0.35 * pxPerM, 0.3, 5);
+    weather(c, dirt, [X(-1.4), 0, X(3.4) - X(-1.4), H], 0.35 * pxPerM, 0.12, 17);
+    // worn paint where crews climb and kneel: canopy sill, walkway, intake lips
+    const chips = maskStamp('edge-wear', 'mask', [150, 154, 156], { lo: 0.35, gamma: 1.4 });
+    const scr = maskStamp('scratches', 'mask', [176, 180, 182], { lo: 0.15 });
+    for (const side of [0.25, 0.75]) {
+      const sg2 = side < 0.5 ? 1 : -1;
+      weather(c, chips, [X(-3.25), Yu(side - 0.02), X(-2.85) - X(-3.25), Yu(0.04)], 0.5 * pxPerM, 0.55, side * 100);
+      weather(c, scr, [X(-5.7), Yu(side - sg2 * 0.17) - Yu(0.04), X(-2.8) - X(-5.7), Yu(0.08)], 0.5 * pxPerM, 0.5, side * 50);
+    }
+    weather(c, scr, [X(-2.75), 0, X(-0.55) - X(-2.75), Yu(0.04)], 0.5 * pxPerM, 0.6, 3);
+    weather(c, scr, [X(-2.75), Yu(0.96), X(-0.55) - X(-2.75), Yu(0.04)], 0.5 * pxPerM, 0.6, 7);
+    weather(c, chips, [0, 0, X(-8.05), H], 0.4 * pxPerM, 0.35, 13);
+    // roughness: crew hand smudges and wiped areas, duller dried water spots
+    const smudgeR = maskStamp('smudge', 'mask', [235, 235, 235], { lo: 0.45, hi: 1, gamma: 1.5 });
+    const smudgeS = maskStamp('smudge', 'mask', [95, 95, 95], { invert: true, lo: 0.5, gamma: 1.5 });
+    weather(p.rough, smudgeR, full, 1.1 * pxPerM, 0.45, 21);
+    weather(p.rough, smudgeS, full, 1.6 * pxPerM, 0.3, 41);
+    const waterR = maskStamp('water-stains', 'mask', [230, 230, 230], { lo: 0.15 });
+    weather(p.rough, waterR, top1, 0.42 * pxPerM, 0.3, 3);
+    weather(p.rough, waterR, top2, 0.42 * pxPerM, 0.3, 29);
+    const scrR = maskStamp('scratches', 'mask', [250, 250, 250], { lo: 0.15 });
+    weather(p.rough, scrR, [X(-2.75), 0, X(-0.55) - X(-2.75), Yu(0.04)], 0.5 * pxPerM, 0.7, 3);
+    weather(p.rough, scrR, [X(-2.75), Yu(0.96), X(-0.55) - X(-2.75), Yu(0.04)], 0.5 * pxPerM, 0.7, 7);
+  }
   // exhaust soot towards the tail
   const sg = c.createLinearGradient(X(5.2), 0, X(7.25), 0);
   sg.addColorStop(0, 'rgba(20,18,16,0)');
@@ -594,24 +681,64 @@ export function paintPanelAtlas(scheme: PaintScheme, specs: { spec: PanelSpec; k
         const [px, py] = toCanvas(r(), r(), lower);
         p.streak(px, py, 30 + r() * 140, 3 + r() * 5, 0.05 * r(), '0,0,0', true);
       }
+      // real scanned weathering at physical scale
+      {
+        const spanLen = Math.hypot(spec.tipLE[0] - spec.rootLE[0], spec.tipLE[1] - spec.rootLE[1]);
+        const pxm = ((W * (u1 - u0)) / 2 / spanLen + (H * (v1 - v0)) / (zMax - zMin)) / 2;
+        const rect: [number, number, number, number] = [x0, v0 * H, x1 - x0, (v1 - v0) * H];
+        const seed = (kind === 'wing' ? 1 : kind === 'stab' ? 2 : 3) * 31 + (lower ? 7 : 0);
+        weather(c, maskStamp('grime', 'mask', [34, 31, 27], { invert: true, lo: 0.25, hi: 0.95, gamma: 1.3 }), rect, 1.2 * pxm, lower ? 0.2 : 0.13, seed);
+        if (!lower) weather(c, maskStamp('water-stains', 'mask', [214, 216, 214], { lo: 0.15, gamma: 1.2 }), rect, 0.42 * pxm, 0.08, seed);
+        weather(p.rough, maskStamp('smudge', 'mask', [235, 235, 235], { lo: 0.45, gamma: 1.5 }), rect, 1.1 * pxm, 0.4, seed);
+        // leading-edge erosion: chipped, rougher band along the first ~6 % of chord
+        const chips = maskStamp('edge-wear', 'mask', [150, 154, 156], { lo: 0.3, gamma: 1.2 });
+        if (chips) {
+          const steps = 24;
+          for (let k = 0; k < steps; k++) {
+            const sA = k / steps, sB = (k + 1) / steps;
+            const [ax, ay] = toCanvas(sA, 0, lower), [bx] = toCanvas(sB, 0, lower), [, cy] = toCanvas(sA, 0.06, lower);
+            weather(c, chips, [Math.min(ax, bx), ay - 2, Math.abs(bx - ax) + 1, cy - ay + 2], 0.45 * pxm, 0.4, seed + k * 3);
+            weather(p.rough, maskStamp('edge-wear', 'mask', [70, 70, 70], { lo: 0.3 }), [Math.min(ax, bx), ay - 2, Math.abs(bx - ax) + 1, cy - ay + 2], 0.45 * pxm, 0.6, seed + k * 3);
+          }
+        }
+      }
     }
   }
   p.noiseOverlay(r, 500, 15, 90, 0.04);
   return p.finish(1.6);
 }
 
-/** Nozzle petals: heat-tinted titanium. */
+/** Nozzle petals: heat-aged steel (scanned) with a procedural heat tint along the petal. */
 export function paintNozzle(W = 512, H = 256): MaterialMaps {
   const p = new Painter(W, H);
   const c = p.color;
-  const g = c.createLinearGradient(0, 0, W, 0);
-  g.addColorStop(0, '#9a948b');
-  g.addColorStop(0.3, '#a08a70');
-  g.addColorStop(0.55, '#7d7a98');
-  g.addColorStop(0.8, '#6a6874');
-  g.addColorStop(1, '#55545a');
-  c.fillStyle = g;
-  c.fillRect(0, 0, W, H);
+  const steel = texImage('nozzle-steel', 'albedo');
+  if (steel) {
+    tileImage(c, steel, 0, 0, W, H, H);
+    // straw -> bronze -> blue -> dark heat discoloration towards the exit
+    const g = c.createLinearGradient(0, 0, W, 0);
+    g.addColorStop(0, 'rgba(178,168,150,0.55)');
+    g.addColorStop(0.3, 'rgba(176,138,92,0.5)');
+    g.addColorStop(0.55, 'rgba(108,104,150,0.5)');
+    g.addColorStop(0.8, 'rgba(84,84,96,0.45)');
+    g.addColorStop(1, 'rgba(48,46,50,0.55)');
+    c.fillStyle = g;
+    c.globalCompositeOperation = 'overlay';
+    c.fillRect(0, 0, W, H);
+    c.globalCompositeOperation = 'source-over';
+    // lift the dark scan towards a heat-treated steel albedo
+    c.fillStyle = 'rgba(150,145,138,0.35)';
+    c.fillRect(0, 0, W, H);
+  } else {
+    const g = c.createLinearGradient(0, 0, W, 0);
+    g.addColorStop(0, '#9a948b');
+    g.addColorStop(0.3, '#a08a70');
+    g.addColorStop(0.55, '#7d7a98');
+    g.addColorStop(0.8, '#6a6874');
+    g.addColorStop(1, '#55545a');
+    c.fillStyle = g;
+    c.fillRect(0, 0, W, H);
+  }
   const r = rng(9);
   for (let i = 0; i < 400; i++) {
     c.fillStyle = `rgba(${r() < 0.5 ? '255,220,180' : '20,15,10'},${r() * 0.08})`;
@@ -620,5 +747,7 @@ export function paintNozzle(W = 512, H = 256): MaterialMaps {
   for (let y = 0; y < H; y += 32) p.line(0, y, W, y, 2, 50, 0.2);
   p.rough.fillStyle = 'rgb(125,125,125)';
   p.rough.fillRect(0, 0, W, H);
+  const sr = texImage('nozzle-steel', 'roughness');
+  if (sr) tileImage(p.rough, sr, 0, 0, W, H, H, { alpha: 0.75 });
   return p.finish(1.5, 0.8);
 }
