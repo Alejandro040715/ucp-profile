@@ -95,6 +95,22 @@ Mando estándar y joystick/HOTAS genérico (perfil de ejes configurable en `Inpu
 - Clics por tipo de interruptor, golpes del tren y ruedas.
 - Avisos con tono y voz.
 
+## Texturas reales (CC0)
+
+Además de la pintura procedural, el avión y la cabina usan 23 texturas escaneadas reales con licencia **CC0** (dominio público) de ambientCG y Poly Haven, descargadas de mirrors públicos en GitHub y reducidas a 512–1024 px (3,25 MB). Están en `public/textures/` y su procedencia está en `public/textures/CREDITS.md`.
+
+- **Fuselaje:** se hornean en la pintura suciedad, manchas de agua, polvo, rayaduras y desgaste en bordes de ataque, tomas de aire y pasarelas, a su escala física.
+- **Microdetalle triplanar** (`src/render/SurfaceDetail.ts`): grano de pintura, recubrimiento RAM, goma de neumáticos, aluminio cepillado, cromo de los amortiguadores y acero envejecido por calor en la tobera.
+- **Cabina:**
+  - Pintura gris desgastada y suelo antideslizante.
+  - Anti-reflejos mate con borde de cuero.
+  - Asiento con cojines de lona y arneses de cincha.
+  - Empuñaduras de goma.
+  - Polvo, huellas y rayaduras en la cúpula que solo se ven contra el sol.
+- **Piloto:** mono Nomex de sarga, traje anti-G de lona, guantes y botas de cuero y máscara de goma.
+
+`npm run textures` regenera el manifiesto (`src/assets/textureManifest.ts`). Si una imagen no carga, cada material vuelve a su versión procedural.
+
 ## Estructura
 
 ```
