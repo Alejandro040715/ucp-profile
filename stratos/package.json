@@ -2,7 +2,7 @@
   "name": "stratos-flight-demo",
   "version": "1.0.0",
   "private": true,
-  "description": "STRATOS — fictional fighter jet flight simulator vertical slice (Three.js / WebGL2)",
+  "description": "STRATOS \u2014 fictional fighter jet flight simulator vertical slice (Three.js / WebGL2)",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p .",
     "test:physics": "node --experimental-strip-types tests/physics.test.ts",
-    "test:smoke": "node tests/smoke.mjs"
+    "shots": "node tests/shot.mjs 0 tests/shots/exterior.js",
+    "artifact": "vite build && node scripts/artifact.mjs"
   },
   "dependencies": {
     "three": "0.186.1"

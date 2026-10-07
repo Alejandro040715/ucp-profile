@@ -32,6 +32,13 @@ export class WorkerPool {
         w.onerror = (ev) => {
           console.warn('Terrain worker failed, falling back to main thread', ev.message);
           this.useFallback = true;
+          // hand any job the dead worker was holding back to the queue
+          const lost = this.busy[idx];
+          if (lost) {
+            this.busy[idx] = null;
+            this.inFlight--;
+            this.queue.push(lost);
+          }
         };
         this.workers.push(w);
         this.busy.push(null);

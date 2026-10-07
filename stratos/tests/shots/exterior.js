@@ -1,7 +1,7 @@
 // close exterior study (terrain streamed first)
 await page.waitForFunction(() => window.game.terrain.pending === 0, null, { timeout: 240000, polling: 500 });
 await page.evaluate(() => { const g = window.game; g.time.setHours(15.5); });
-console.log(await page.evaluate(() => { const g = window.game; return JSON.stringify({ d: g.aircraft.damage.destroyed, pos: g.aircraft.position, legs: g.aircraft.gear.legs.map((l) => l.health), ph: g.pipeline.params.exposure, cloud: g.pipeline.params.camCloud }); }));
+
 const views = [
   ['x_front34', [9, 2.2, -11], [0, 0.3, -2]],
   ['x_side', [13, 0.8, -1], [0, 0.5, -1]],
