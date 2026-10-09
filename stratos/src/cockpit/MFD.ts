@@ -148,7 +148,7 @@ export class MFD {
   }
 
   private drawBoot(g: CanvasRenderingContext2D, t: number): void {
-    this.text(g, 'XF-41 AVIONICS', 256, 200, 26, GREEN, 'center');
+    this.text(g, 'F-22A AVIONICS', 256, 200, 26, GREEN, 'center');
     this.text(g, 'BIT IN PROGRESS', 256, 240, 18, GREEN, 'center');
     g.strokeStyle = GREEN;
     g.strokeRect(126, 280, 260, 18);

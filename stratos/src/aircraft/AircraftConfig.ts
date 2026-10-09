@@ -1,4 +1,5 @@
-// Data definition of the fictional XF-41 "Corvus" single-seat fighter.
+// Data definition of the player aircraft: an F-22A Raptor (approximate public
+// figures; the flight model is generic, not Lockheed Martin data).
 // Everything tunable lives here so Blueprint-style tweaking is possible without
 // touching system code. Units: SI (m, kg, s, N, rad unless noted).
 
@@ -34,23 +35,23 @@ export interface FuelTankConfig {
 }
 
 export const AircraftConfig = {
-  name: 'XF-41 Corvus',
+  name: 'F-22A Raptor',
 
   // --- mass & inertia ---
-  emptyMass: 9850,
+  emptyMass: 19700,
   pilotMass: 110,
   /** principal inertia at reference mass, about body axes (pitch, yaw, roll) */
-  inertiaPitch: 78000,
-  inertiaYaw: 90000,
-  inertiaRoll: 15500,
-  inertiaRefMass: 14800,
+  inertiaPitch: 200000,
+  inertiaYaw: 245000,
+  inertiaRoll: 48000,
+  inertiaRefMass: 29000,
   /** empty-aircraft CG in body frame (z aft). Aero reference point is the origin. */
   emptyCG: [0, 0, 0.12] as [number, number, number],
 
   // --- geometry ---
-  wingArea: 38.0,
-  wingSpan: 10.8,
-  meanChord: 4.0,
+  wingArea: 78.0,
+  wingSpan: 13.56,
+  meanChord: 5.75,
 
   // --- aerodynamics (per radian unless noted) ---
   aero: {
@@ -130,9 +131,10 @@ export const AircraftConfig = {
 
   // --- engine ---
   engine: {
-    thrustIdle: 3800,
-    thrustMil: 79000,
-    thrustAB: 128000,
+    // two F119-class engines, modelled as one thrust line
+    thrustIdle: 7600,
+    thrustMil: 232000,
+    thrustAB: 312000,
     n2Idle: 0.63,
     n2Start: 0.22, // light-off
     spoolUpRate: 0.30, // fraction / s (max)
@@ -142,23 +144,24 @@ export const AircraftConfig = {
     abStageRate: 1.2, // fraction / s
     tsfcDry: 2.15e-5, // kg / (N s)
     tsfcAB: 5.1e-5,
-    idleFuelFlow: 0.11, // kg/s
+    idleFuelFlow: 0.22, // kg/s
     egtIdle: 410, // C
     egtMil: 790,
     egtAB: 860,
     egtStartPeak: 640,
     egtMax: 940,
-    rotorInertia: 55, // kg m^2 (gyroscopic coupling)
+    rotorInertia: 110, // kg m^2 (gyroscopic coupling)
     rotorRadPerSec: 1150, // at 100% N2
-    nozzleMount: [0, 0.05, 7.1] as [number, number, number],
+    // thrust line through the CG height (the F119s sit on the aircraft's waterline)
+    nozzleMount: [0, -0.05, 6.7] as [number, number, number],
   },
 
   // --- fuel ---
   fuelTanks: [
-    { id: 'FWD', capacity: 1300, pos: [0, 0.2, -1.8], feedPriority: 2 },
-    { id: 'AFT', capacity: 1350, pos: [0, 0.15, 2.2], feedPriority: 2 },
-    { id: 'WING L', capacity: 1050, pos: [-2.4, 0.05, 1.0], feedPriority: 1 },
-    { id: 'WING R', capacity: 1050, pos: [2.4, 0.05, 1.0], feedPriority: 1 },
+    { id: 'FWD', capacity: 2000, pos: [0, 0.1, -2.4], feedPriority: 2 },
+    { id: 'AFT', capacity: 2200, pos: [0, 0.1, 2.0], feedPriority: 2 },
+    { id: 'WING L', capacity: 2000, pos: [-3.0, -0.1, 0.6], feedPriority: 1 },
+    { id: 'WING R', capacity: 2000, pos: [3.0, -0.1, 0.6], feedPriority: 1 },
   ] as FuelTankConfig[],
 
   // --- electrical ---
@@ -171,9 +174,10 @@ export const AircraftConfig = {
 
   // --- landing gear ---
   gear: [
-    { id: 'nose', mount: [0, -0.4, -5.35], strutLength: 1.91, travel: 0.32, wheelRadius: 0.29, stiffness: 115000, damping: 26000, reboundDamping: 12000, steerable: true, brake: false, limitLoad: 260000 },
-    { id: 'left', mount: [-1.25, -0.15, 0.95], strutLength: 2.05, travel: 0.38, wheelRadius: 0.39, stiffness: 340000, damping: 62000, reboundDamping: 30000, steerable: false, brake: true, limitLoad: 380000 },
-    { id: 'right', mount: [1.25, -0.15, 0.95], strutLength: 2.05, travel: 0.38, wheelRadius: 0.39, stiffness: 340000, damping: 62000, reboundDamping: 30000, steerable: false, brake: true, limitLoad: 380000 },
+    // axle positions match the F-22 model resting on its tyres
+    { id: 'nose', mount: [0, -0.6, -5.18], strutLength: 1.226, travel: 0.3, wheelRadius: 0.3, stiffness: 300000, damping: 27000, reboundDamping: 13000, steerable: true, brake: false, limitLoad: 230000 },
+    { id: 'left', mount: [-2.1, -0.55, 0.97], strutLength: 1.204, travel: 0.36, wheelRadius: 0.385, stiffness: 850000, damping: 70000, reboundDamping: 35000, steerable: false, brake: true, limitLoad: 420000 },
+    { id: 'right', mount: [2.1, -0.55, 0.97], strutLength: 1.204, travel: 0.36, wheelRadius: 0.385, stiffness: 850000, damping: 70000, reboundDamping: 35000, steerable: false, brake: true, limitLoad: 420000 },
   ] as GearLegConfig[],
   gearTransitTime: 6.5,
   gearMaxSpeed: 150, // m/s IAS before damage risk
@@ -184,22 +188,22 @@ export const AircraftConfig = {
 
   // --- airframe contact points used for scraping / crash detection ---
   contacts: [
-    { id: 'nose', pos: [0, -0.1, -8.9], component: 'fuselage' },
-    { id: 'belly_fwd', pos: [0, -1.05, -3.2], component: 'fuselage' },
-    { id: 'belly_mid', pos: [0, -1.1, 0.8], component: 'fuselage' },
-    { id: 'belly_aft', pos: [0, -0.85, 4.6], component: 'engine' },
-    { id: 'nozzle', pos: [0, -0.35, 7.3], component: 'engine' },
-    { id: 'wingtip_l', pos: [-5.4, -0.15, 2.2], component: 'leftWing' },
-    { id: 'wingtip_r', pos: [5.4, -0.15, 2.2], component: 'rightWing' },
-    { id: 'stab_l', pos: [-3.0, -0.25, 6.6], component: 'tail' },
-    { id: 'stab_r', pos: [3.0, -0.25, 6.6], component: 'tail' },
-    { id: 'fin_l', pos: [-1.9, 2.75, 6.5], component: 'tail' },
-    { id: 'fin_r', pos: [1.9, 2.75, 6.5], component: 'tail' },
-    { id: 'canopy', pos: [0, 1.32, -4.1], component: 'fuselage' },
+    { id: 'nose', pos: [0, -0.25, -11.0], component: 'fuselage' },
+    { id: 'belly_fwd', pos: [0, -1.09, -3.56], component: 'fuselage' },
+    { id: 'belly_mid', pos: [0, -1.12, -0.56], component: 'fuselage' },
+    { id: 'belly_aft', pos: [0, -0.95, 3.44], component: 'engine' },
+    { id: 'nozzle', pos: [0, -0.63, 6.64], component: 'engine' },
+    { id: 'wingtip_l', pos: [-6.8, -0.23, 2.96], component: 'leftWing' },
+    { id: 'wingtip_r', pos: [6.8, -0.23, 2.96], component: 'rightWing' },
+    { id: 'stab_l', pos: [-4.52, 0.0, 6.6], component: 'tail' },
+    { id: 'stab_r', pos: [4.52, 0.0, 6.6], component: 'tail' },
+    { id: 'fin_l', pos: [-3.6, 3.1, 6.9], component: 'tail' },
+    { id: 'fin_r', pos: [3.6, 3.1, 6.9], component: 'tail' },
+    { id: 'canopy', pos: [0, 1.42, -6.2], component: 'fuselage' },
   ] as ContactPointConfig[],
 
   // --- cockpit ---
-  eyePoint: [0, 0.96, -4.2] as [number, number, number],
+  eyePoint: [0, 0.98, -6.2] as [number, number, number],
   machCritical: 1.0,
   vneMach: 2.25,
 };

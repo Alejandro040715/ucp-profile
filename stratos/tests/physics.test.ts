@@ -162,7 +162,8 @@ for (const [alt, spd] of [[1000, 150], [3000, 220], [9000, 280]] as const) {
   run(ac3, 200, () => {
     ac3.controls.pitch = Math.max(-0.3, Math.min(0.3, (11000 - ac3.position.y) * 0.002 - ac3.velocity.y * 0.02));
   });
-  check('11km MIL speed subsonic/transonic', ac3.t.mach > 0.85 && ac3.t.mach < 1.2, `M=${ac3.t.mach.toFixed(2)}`);
+  // the F-22 supercruises: supersonic at 11 km without afterburner
+  check('11km MIL supercruise ~M1.1-1.8', ac3.t.mach > 1.1 && ac3.t.mach < 1.8, `M=${ac3.t.mach.toFixed(2)}`);
 }
 
 // ---------- 6. max G pull / G limiter ----------

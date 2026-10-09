@@ -7,6 +7,7 @@
 import { Color, Object3D, Quaternion, SpotLight, Vector3, type Texture } from 'three';
 import { AircraftPhysics } from './AircraftPhysics.ts';
 import { FighterModel, defaultVisualState } from './visual/FighterModel.ts';
+import { F22Model, hasF22 } from './visual/F22Model.ts';
 import { visualFromPhysics } from './visual/visualFromPhysics.ts';
 import { Cockpit } from '../cockpit/Cockpit.ts';
 import type { CockpitControl, GuardedSwitch, PushButton, RotaryKnob } from '../cockpit/CockpitControls.ts';
@@ -31,7 +32,7 @@ const _v = new Vector3();
 
 export class PlayerAircraft {
   readonly physics = new AircraftPhysics();
-  readonly model: FighterModel;
+  readonly model: FighterModel | F22Model;
   readonly cockpit: Cockpit;
   readonly visual = defaultVisualState();
   readonly lights: ExternalLights = { nav: false, strobe: false, beacon: false, landing: 0, formation: 0 };
@@ -53,14 +54,16 @@ export class PlayerAircraft {
   hudMode = 2;
 
   constructor(skyLut: Texture, scheme = 'standard') {
-    this.model = new FighterModel(skyLut, scheme);
+    // the user's F-22 when its model loaded, the procedural XF-41 otherwise
+    this.model = hasF22() ? new F22Model(skyLut) : new FighterModel(skyLut, scheme);
     this.cockpit = new Cockpit(skyLut);
     this.model.root.add(this.cockpit.root);
     // landing / taxi light on the nose gear strut
     this.landingLight = new SpotLight(0xfff1dc, 0, 900, 0.32, 0.45, 1.6);
-    this.landingLight.position.set(0, -1.15, -5.3);
+    const ll = this.model.lightAnchors.landing ?? new Vector3(0, -1.15, -5.3);
+    this.landingLight.position.copy(ll);
     const tgt = new Object3D();
-    tgt.position.set(0, -2.3, -40);
+    tgt.position.set(ll.x, ll.y - 1.15, -40);
     this.model.root.add(this.landingLight, tgt);
     this.landingLight.target = tgt;
     this.landingLight.castShadow = false;

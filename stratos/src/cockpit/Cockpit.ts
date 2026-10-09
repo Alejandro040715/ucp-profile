@@ -22,6 +22,7 @@ import { surfaceDetailHook, surfaceDetailKey, type SurfaceDetailOptions } from '
 import { libTexture } from '../assets/TextureLibrary.ts';
 import { F16Cockpit, f16PanelLight, hasF16Cockpit, type F16Anchor } from './F16Cockpit.ts';
 import type { AircraftPhysics } from '../aircraft/AircraftPhysics.ts';
+import { AircraftConfig } from '../aircraft/AircraftConfig.ts';
 
 // FS 36231-like dark gull grey: reads as grey in daylight, never pure black
 const PAINT = 0x474c51;
@@ -203,6 +204,9 @@ export interface CockpitAnimState {
   ac?: AircraftPhysics;
 }
 
+/** eye point the cockpit geometry is designed around (body frame) */
+const DESIGN_EYE = new Vector3(0, 0.96, -4.2);
+
 export class Cockpit {
   readonly root = new Group();
   private staticRoot = new Group();
@@ -238,6 +242,8 @@ export class Cockpit {
     this.mfdL = new MFD('ENGINE', 0.165, skyLut);
     this.mfdR = new MFD('FLIGHT', 0.165, skyLut);
     this.f16 = hasF16Cockpit() ? new F16Cockpit() : null;
+    // the whole cockpit follows the airframe's eye point
+    this.root.position.set(...AircraftConfig.eyePoint).sub(DESIGN_EYE);
     if (!this.f16) this.buildStructure();
     this.buildPanels();
     if (!this.f16) {
@@ -480,7 +486,7 @@ export class Cockpit {
         { text: 'DIRECT\nASSIST', x: 0.357, y: -0.135, size: 0.0048 },
         { text: 'GEAR', x: 0, y: -0.115, size: 0.007 },
         { text: 'N    L    R', x: 0, y: -0.165, size: 0.0055 },
-        { text: 'XF-41  AVIONICS SUITE  P/N 41-7730', x: 0, y: -0.172, size: 0.004, backlit: false, color: '#8a8c88' },
+        { text: 'F-22A  AVIONICS SUITE  P/N 22-7730', x: 0, y: -0.172, size: 0.004, backlit: false, color: '#8a8c88' },
       ],
       borders: [[-0.43, -0.18, -0.325, 0.18], [0.325, -0.18, 0.43, 0.18], [-0.11, -0.18, 0.11, 0.18]],
     });
@@ -616,7 +622,7 @@ export class Cockpit {
         { text: 'NWS', x: 0.07, y: -0.255, size: 0.0055 },
         { text: 'OXYGEN', x: -0.04, y: -0.38, size: 0.0055 },
         { text: 'CLOSE\n\nOPEN', x: -0.045, y: -0.3, size: 0.0042 },
-        { text: 'XF-41 — DO NOT EXCEED 9.0 G', x: 0.0, y: -0.47, size: 0.0045, backlit: false, color: '#ffd0a0' },
+        { text: 'F-22A — DO NOT EXCEED 9.0 G', x: 0.0, y: -0.47, size: 0.0045, backlit: false, color: '#ffd0a0' },
       ],
       extra: (g, e, X, Y, px) => {
         knobScale(g, e, X(-0.07), Y(0.075), 0.016 * px, 6);

@@ -96,7 +96,7 @@ function kneeboardTexture(): CanvasTexture {
   g.fillRect(0, 0, 256, 384);
   g.fillStyle = '#1d1f22';
   g.font = '700 20px "Arial Narrow", Arial, sans-serif';
-  g.fillText('XF-41  BEFORE TAKEOFF', 14, 32);
+  g.fillText('F-22A  BEFORE TAKEOFF', 14, 32);
   g.fillRect(14, 40, 228, 2);
   g.font = '500 15px "Arial Narrow", Arial, sans-serif';
   const items = ['CANOPY .......... CLOSED/LOCKED', 'FLAPS ............ TO', 'TRIM ............. SET', 'FCS .............. ASSIST', 'FUEL ............. CHECK', 'WARNINGS ......... CLEAR', 'LIGHTS ........... AS REQ', 'PARK BRAKE ....... OFF'];

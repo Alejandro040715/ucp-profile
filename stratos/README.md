@@ -1,4 +1,4 @@
-# STRATOS · XF-41 Corvus
+# STRATOS · F-22A Raptor
 
 Demo técnica jugable de un simulador de caza moderno ficticio, centrada en el avión: modelo de vuelo físico, sistemas, cabina interactiva, efectos y sonido. Funciona en el navegador con Three.js y WebGL2, sin assets externos: geometría, texturas, sonido y terreno se generan por código al arrancar.
 
@@ -155,3 +155,21 @@ posterior** (`LICENSE`); créditos en `public/models/F16-COCKPIT-CREDITS.md`.
 
 Regenerar: `python3 scripts/f16/fetch.py` (descarga el modelo) y
 `python3 scripts/f16/convert.py <dir> Models/Cockpit/Main/cockpit.xml <out> "Pilot_ext,Pilot_int" "" scripts/f16/dyn.json`.
+
+## F-22A Raptor (modelo del usuario)
+
+El avión del jugador es el F-22 modelado en Blender por el autor del proyecto
+(`F22_Raptor_Perfil.blend`, librea a partir de imágenes de referencia propias).
+`scripts/f22/export_glb.py` (con `pip install bpy`) lo convierte a
+`public/models/f22.glb`: quita cámaras, luces y la cabina simplificada, abre el
+hueco de la cabina bajo la cúpula, monta las piezas móviles bajo nodos con su
+pivote (estabilizadores, flaps de las toberas 2D, cúpula, tren con
+amortiguador, dirección y ruedas, compuertas) y hornea la librea procedural a
+un atlas de 4096 px. `src/aircraft/visual/F22Model.ts` lo anima con la
+simulación; la cabina F-16 se coloca en el punto de vista del F-22.
+
+La física usa cifras públicas aproximadas del F-22 (19,7 t en vacío, 2 × F119,
+78 m² de ala, 8,2 t de combustible): supercrucero a Mach 1,25 a 11 km sin
+postcombustión. Si el modelo no carga, el juego vuelve al XF-41 procedural.
+
+Regenerar: `python scripts/f22/export_glb.py F22_Raptor_Perfil.blend <salida> 4096`.

@@ -48,8 +48,8 @@ export class UI {
     this.menu = el('div', 'ui-menu', this.root);
     const panel = el('div', 'ui-panel', this.menu);
     el('div', 'ui-kicker', panel, 'STRATOS · FLIGHT &amp; SYSTEMS DEMONSTRATOR');
-    el('h1', 'ui-title', panel, 'XF-41 CORVUS');
-    el('p', 'ui-sub', panel, 'Single-engine air-superiority demonstrator. 6-DOF rigid body at 240 Hz, fly-by-wire with AoA / G limiting, afterburning turbofan, working landing gear and a fully clickable cockpit.');
+    el('h1', 'ui-title', panel, 'F-22A RAPTOR');
+    el('p', 'ui-sub', panel, 'Twin-engine stealth air-superiority fighter with 2D thrust-vectoring nozzles. 6-DOF rigid body at 240 Hz, fly-by-wire with AoA / G limiting, supercruise and afterburner, working landing gear and a fully clickable F-16 cockpit.');
     this.resumeBtn = el('button', 'ui-resume', panel, 'RESUME') as HTMLButtonElement;
     this.resumeBtn.addEventListener('click', () => this.closeMenu());
     const cards = el('div', 'ui-cards', panel);

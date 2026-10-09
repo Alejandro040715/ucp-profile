@@ -12,7 +12,7 @@ import { ParticleSystem } from './Particles.ts';
 import { Trail } from './Trails.ts';
 import { CURVATURE_GLSL, FX_DEPTH_GLSL, fxDepth, globals } from '../render/Globals.ts';
 import type { AircraftPhysics } from '../aircraft/AircraftPhysics.ts';
-import { NOZZLE, WING } from '../aircraft/visual/FighterGeometry.ts';
+import { airframe } from '../aircraft/visual/Airframe.ts';
 import { clamp, damp, DEG, smoothstep } from '../core/math.ts';
 import { events } from '../core/EventBus.ts';
 
@@ -179,9 +179,9 @@ export class AircraftEffects {
   readonly vortexL: Trail;
   readonly vortexR: Trail;
   readonly smokeTrail: Trail;
-  private flameOuter: Mesh;
-  private flameCore: Mesh;
-  private haze: Mesh;
+  private flameOuter: Mesh[] = [];
+  private flameCore: Mesh[] = [];
+  private haze: Mesh[] = [];
   private wingMist: Mesh[] = [];
   private lerx: Mesh[] = [];
   private vaporCone: Mesh;
@@ -205,26 +205,37 @@ export class AircraftEffects {
       for (let i = 0; i < uv.count; i++) uv.setY(i, 1 - uv.getY(i));
       return g;
     };
-    this.flameOuter = new Mesh(flameGeo(0.56, 1), fxMat(flameFrag, { uIntensity: { value: 0 }, uDiamonds: { value: 3.5 }, uColA: { value: new Color(1.0, 0.62, 0.32) }, uColB: { value: new Color(0.9, 0.3, 0.1) }, uCore: { value: 0.3 } }, true));
-    this.flameCore = new Mesh(flameGeo(0.36, 1), fxMat(flameFrag, { uIntensity: { value: 0 }, uDiamonds: { value: 5.5 }, uColA: { value: new Color(0.55, 0.7, 1.0) }, uColB: { value: new Color(1.0, 0.75, 0.45) }, uCore: { value: 1.0 } }, true));
-    for (const f of [this.flameOuter, this.flameCore]) {
-      f.position.set(0, 0.08, NOZZLE.z0 + NOZZLE.length - 0.1);
-      f.frustumCulled = false;
-      this.anchor.add(f);
-    }
-    // ---- heat haze cone (distortion pass)
+    // one flame + haze per nozzle; flat 2D nozzles get an elliptical plume
     const hazeGeo = new CylinderGeometry(0.5, 2.2, 1, 20, 12, true);
     hazeGeo.rotateX(-Math.PI / 2);
     hazeGeo.translate(0, 0, 0.5);
     const huv = hazeGeo.attributes.uv;
     for (let i = 0; i < huv.count; i++) huv.setY(i, 1 - huv.getY(i));
-    this.haze = new Mesh(hazeGeo, fxMat(hazeFrag, { uStrength: { value: 0 } }, true));
-    this.haze.position.set(0, 0.08, NOZZLE.z0 + NOZZLE.length);
-    this.haze.frustumCulled = false;
-    this.hazeAnchor.add(this.haze);
+    for (const n of airframe.nozzles) {
+      const outer = new Mesh(flameGeo(0.56, 1), fxMat(flameFrag, { uIntensity: { value: 0 }, uDiamonds: { value: 3.5 }, uColA: { value: new Color(1.0, 0.62, 0.32) }, uColB: { value: new Color(0.9, 0.3, 0.1) }, uCore: { value: 0.3 } }, true));
+      const core = new Mesh(flameGeo(0.36, 1), fxMat(flameFrag, { uIntensity: { value: 0 }, uDiamonds: { value: 5.5 }, uColA: { value: new Color(0.55, 0.7, 1.0) }, uColB: { value: new Color(1.0, 0.75, 0.45) }, uCore: { value: 1.0 } }, true));
+      for (const f of [outer, core]) {
+        f.position.copy(n.pos).z -= 0.1;
+        f.userData.sx = n.width / 1.12;
+        f.userData.sy = n.height / 1.12;
+        f.frustumCulled = false;
+        this.anchor.add(f);
+      }
+      this.flameOuter.push(outer);
+      this.flameCore.push(core);
+      // ---- heat haze cone (distortion pass)
+      const h = new Mesh(hazeGeo, fxMat(hazeFrag, { uStrength: { value: 0 } }, true));
+      h.position.copy(n.pos);
+      h.userData.sx = n.width / 1.12;
+      h.userData.sy = n.height / 1.12;
+      h.frustumCulled = false;
+      this.hazeAnchor.add(h);
+      this.haze.push(h);
+    }
     // ---- condensation sheets over each wing (three stacked layers)
     for (const side of [1, -1]) {
       for (let layer = 0; layer < 3; layer++) {
+        const WING = airframe.wing;
         const span = WING.tipLE[0] - WING.rootLE[0];
         const g = new PlaneGeometry(1, 1, 8, 8);
         // map plane to the wing planform (u along span, v along chord)
@@ -234,7 +245,7 @@ export class AircraftEffects {
           const x = WING.rootLE[0] + span * u;
           const zLE = WING.rootLE[2] + (WING.tipLE[2] - WING.rootLE[2]) * u;
           const chord = WING.rootChord + (WING.tipChord - WING.rootChord) * u;
-          p.setXYZ(i, side * x, 0.12 + layer * 0.09 + v * 0.05 - u * 0.12, zLE + chord * v * 0.85);
+          p.setXYZ(i, side * x, WING.y + layer * 0.09 + v * 0.05 - u * 0.12, zLE + chord * v * 0.85);
         }
         g.computeVertexNormals();
         const m = new Mesh(g, fxMat(mistFrag, { uAmount: { value: 0 }, uMode: { value: 0 } }, false));
@@ -249,7 +260,7 @@ export class AircraftEffects {
       const tuv = tube.attributes.uv;
       for (let i = 0; i < tuv.count; i++) tuv.setY(i, 1 - tuv.getY(i));
       const lm = new Mesh(tube, fxMat(mistFrag, { uAmount: { value: 0 }, uMode: { value: 1 } }, false));
-      const a = new Vector3(side * 1.0, 0.32, -4.2), b = new Vector3(side * 2.9, 0.62, 3.8);
+      const a = airframe.lerx[0].clone().multiply(new Vector3(side, 1, 1)), b = airframe.lerx[1].clone().multiply(new Vector3(side, 1, 1));
       lm.position.copy(a);
       lm.scale.set(1, 1, a.distanceTo(b));
       lm.frustumCulled = false;
@@ -258,7 +269,7 @@ export class AircraftEffects {
     }
     // fix lookAt usage in local space: orient tubes manually
     for (const [i, side] of [[0, 1], [1, -1]] as const) {
-      const a = new Vector3(side * 1.0, 0.32, -4.2), b = new Vector3(side * 2.9, 0.62, 3.8);
+      const a = airframe.lerx[0].clone().multiply(new Vector3(side, 1, 1)), b = airframe.lerx[1].clone().multiply(new Vector3(side, 1, 1));
       const dir = b.clone().sub(a).normalize();
       this.lerx[i].quaternion.setFromUnitVectors(new Vector3(0, 0, 1), dir);
     }
@@ -271,7 +282,8 @@ export class AircraftEffects {
     const lathe = new LatheGeometry(pts, 40);
     lathe.rotateX(Math.PI / 2);
     this.vaporCone = new Mesh(lathe, fxMat(mistFrag, { uAmount: { value: 0 }, uMode: { value: 2 } }, false));
-    this.vaporCone.position.set(0, 0.25, -3.2);
+    this.vaporCone.position.copy(airframe.vaporCone.pos);
+    this.vaporCone.scale.setScalar(airframe.vaporCone.scale);
     this.vaporCone.frustumCulled = false;
     this.anchor.add(this.vaporCone);
     // ---- landing light beam
@@ -281,7 +293,7 @@ export class AircraftEffects {
     const buv = beamGeo.attributes.uv;
     for (let i = 0; i < buv.count; i++) buv.setY(i, buv.getY(i));
     this.beam = new Mesh(beamGeo, fxMat(beamFrag, { uAmount: { value: 0 } }, true));
-    this.beam.position.set(0, -1.15, -5.3);
+    this.beam.position.copy(airframe.landingLight);
     this.beam.rotation.x = -0.05;
     this.beam.frustumCulled = false;
     this.anchor.add(this.beam);
@@ -311,17 +323,25 @@ export class AircraftEffects {
     const flicker = 0.9 + 0.1 * Math.sin(this.time * 47) * Math.sin(this.time * 31);
     const lenO = (2.8 + 3.0 * ab) * altK * flicker;
     const lenC = (1.6 + 2.0 * ab) * altK;
-    this.flameOuter.scale.set(1 + 0.25 * (altK - 1), 1 + 0.25 * (altK - 1), lenO);
-    this.flameCore.scale.set(1, 1, lenC);
-    (this.flameOuter.material as ShaderMaterial).uniforms.uIntensity.value = ab * 1.4;
-    (this.flameCore.material as ShaderMaterial).uniforms.uIntensity.value = ab * 2.2;
-    this.flameOuter.visible = this.flameCore.visible = ab > 0.01;
+    const wide = 1 + 0.25 * (altK - 1);
+    for (const f of this.flameOuter) {
+      f.scale.set(wide * f.userData.sx, wide * f.userData.sy, lenO);
+      (f.material as ShaderMaterial).uniforms.uIntensity.value = ab * 1.4;
+      f.visible = ab > 0.01;
+    }
+    for (const f of this.flameCore) {
+      f.scale.set(f.userData.sx, f.userData.sy, lenC);
+      (f.material as ShaderMaterial).uniforms.uIntensity.value = ab * 2.2;
+      f.visible = ab > 0.01;
+    }
     // ---- heat haze: always present with the engine hot, strongest in AB
     const hot = clamp((e.egt - 200) / 600, 0, 1);
     const hazeLen = 8 + 18 * hot + 14 * ab;
-    this.haze.scale.set(1 + ab * 0.6, 1 + ab * 0.6, hazeLen);
-    (this.haze.material as ShaderMaterial).uniforms.uStrength.value = hot * (0.5 + 0.5 * clamp(e.n2, 0, 1)) + ab * 1.4;
-    this.haze.visible = hot > 0.02;
+    for (const h of this.haze) {
+      h.scale.set((1 + ab * 0.6) * h.userData.sx, (1 + ab * 0.6) * h.userData.sy, hazeLen);
+      (h.material as ShaderMaterial).uniforms.uStrength.value = (hot * (0.5 + 0.5 * clamp(e.n2, 0, 1)) + ab * 1.4) / Math.sqrt(this.haze.length);
+      h.visible = hot > 0.02;
+    }
     // ---- condensation physics proxy: humid air + low pressure over the wing (high CL / G) + low altitude
     const lowAlt = 1 - smoothstep(4000, 9000, ac.position.y);
     const cl = Math.max(0, ac.aero.liftCoefficientNorm);
@@ -344,14 +364,16 @@ export class AircraftEffects {
     this.vaporCone.visible = this.coneAmount > 0.01;
     // ---- wingtip vortices (condensation in the vortex core)
     const vortexStr = clamp((humidity - 0.4) * 2.5, 0, 1) * lowAlt * smoothstep(0.35, 0.8, cl) * smoothstep(60, 120, t.tas) * (t.onGround ? 0 : 1);
-    for (const [trail, x] of [[this.vortexL, -5.35], [this.vortexR, 5.35]] as const) {
-      _v.set(x, -0.15, 3.4).applyQuaternion(quat).add(pos);
+    const tip = airframe.wingTip;
+    for (const [trail, sx] of [[this.vortexL, -1], [this.vortexR, 1]] as const) {
+      _v.set(sx * tip.x, tip.y, tip.z).applyQuaternion(quat).add(pos);
       trail.push(_v, now, vortexStr);
     }
     // ---- contrail: cold, high, engine running (persistent, wide)
     const tempC = ac.atm.temperature - 273.15;
     const contrailStr = smoothstep(-38, -48, tempC) * (e.running ? 1 : 0) * smoothstep(7500, 9000, ac.position.y) * clamp(0.4 + humidity, 0, 1);
-    _v.set(0, 0.08, NOZZLE.z0 + NOZZLE.length + 6).applyQuaternion(quat).add(pos);
+    const nz = airframe.nozzles[0].pos;
+    _v.set(0, nz.y, nz.z + 6).applyQuaternion(quat).add(pos);
     this.contrail.push(_v, now, contrailStr);
     // ---- damage smoke trail + fire particles
     const smokeAmt = ac.damage.smoke;
@@ -361,7 +383,8 @@ export class AircraftEffects {
     this.emitAcc.smoke += dt * (smokeAmt * 30 + this.startPuff * 40);
     while (this.emitAcc.smoke >= 1) {
       this.emitAcc.smoke -= 1;
-      _v.set((Math.random() - 0.5) * 0.6, 0.1 + (Math.random() - 0.5) * 0.6, NOZZLE.z0 + 0.8).applyQuaternion(quat).add(pos);
+      const np = airframe.nozzles[Math.floor(Math.random() * airframe.nozzles.length)].pos;
+      _v.set(np.x + (Math.random() - 0.5) * 0.6, np.y + (Math.random() - 0.5) * 0.6, np.z - 0.25).applyQuaternion(quat).add(pos);
       const c = this.startPuff > 0 ? new Color(0.16, 0.15, 0.14) : new Color(0.12, 0.115, 0.11);
       this.smoke.emit(_v, _v2.copy(vel).multiplyScalar(0.3).add(new Vector3(0, 1.5, 0)), 0.8 + Math.random() * 0.6, 2.5, 4 + Math.random() * 3, c, this.startPuff > 0 ? 0.45 : 0.55 * smokeAmt);
     }

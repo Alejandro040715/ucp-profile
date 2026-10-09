@@ -137,6 +137,8 @@ export class AircraftPhysics {
 
   /** Place the aircraft. heading in degrees (0 = north = -Z). */
   reset(pos: Vector3, headingDeg: number, speed: number, onGround: boolean, env: PhysicsEnvironment): void {
+    // the trim and strut-sag solutions below need the real mass (fuel included)
+    this.updateMass();
     this.position.copy(pos);
     _euler.set(0, -headingDeg * (Math.PI / 180), 0, 'YXZ');
     this.quaternion.setFromEuler(_euler);
@@ -168,7 +170,10 @@ export class AircraftPhysics {
     if (onGround) {
       // settle on the gear: CG height so that struts are statically compressed
       env.sampleGround(pos.x, pos.z, _gs);
-      this.position.y = _gs.height + 2.38;
+      // CG height with the main struts statically compressed (~43% of the weight each)
+      const main = this.cfg.gear.find((g) => g.id === 'left') ?? this.cfg.gear[0];
+      const sag = (this.mass * G0 * 0.43) / main.stiffness;
+      this.position.y = _gs.height - main.mount[1] + main.strutLength - sag + main.wheelRadius;
       this.gear.handleDown = true;
       for (const l of this.gear.legs) {
         l.extension = 1;

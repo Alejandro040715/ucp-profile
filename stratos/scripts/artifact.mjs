@@ -19,21 +19,23 @@ if (existsSync('dist/textures')) cpSync('dist/textures', join(out, 'textures'), 
 // F-16 cockpit model (GPL, credits alongside)
 if (existsSync('dist/models')) {
   cpSync('dist/models', join(out, 'models'), { recursive: true });
-  // the artifact host does not serve .glb: ship it as glTF JSON with the
-  // binary chunk embedded as a data URI (the loader falls back to it)
-  const glb = readFileSync(join(out, 'models/f16-cockpit.glb'));
-  const jsonLen = glb.readUInt32LE(12);
-  const gltf = JSON.parse(glb.subarray(20, 20 + jsonLen).toString('utf8'));
-  const binStart = 20 + jsonLen;
-  const bin = glb.subarray(binStart + 8, binStart + 8 + glb.readUInt32LE(binStart));
-  gltf.buffers = [{ byteLength: bin.length, uri: 'data:application/octet-stream;base64,' + bin.toString('base64') }];
-  writeFileSync(join(out, 'models/f16-cockpit.json'), JSON.stringify(gltf));
-  rmSync(join(out, 'models/f16-cockpit.glb'));
+  // the artifact host does not serve .glb: ship each model as glTF JSON with
+  // the binary chunk embedded as a data URI (the loaders fall back to it)
+  for (const f of readdirSync(join(out, 'models')).filter((f) => f.endsWith('.glb'))) {
+    const glb = readFileSync(join(out, 'models', f));
+    const jsonLen = glb.readUInt32LE(12);
+    const gltf = JSON.parse(glb.subarray(20, 20 + jsonLen).toString('utf8'));
+    const binStart = 20 + jsonLen;
+    const bin = glb.subarray(binStart + 8, binStart + 8 + glb.readUInt32LE(binStart));
+    gltf.buffers = [{ byteLength: bin.length, uri: 'data:application/octet-stream;base64,' + bin.toString('base64') }];
+    writeFileSync(join(out, 'models', f.replace(/\.glb$/, '.json')), JSON.stringify(gltf));
+    rmSync(join(out, 'models', f));
+  }
 }
 writeFileSync(
   join(out, 'index.html'),
-  `<title>Stratos XF-41 Corvus</title>
-<meta name="description" content="Fictional modern fighter flight simulator vertical slice: 6-DOF flight model, fly-by-wire, clickable cockpit, procedural sound.">
+  `<title>Stratos F-22A Raptor</title>
+<meta name="description" content="F-22A Raptor flight simulator vertical slice: 6-DOF flight model, fly-by-wire, real F-16 cockpit, procedural sound.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 ${fonts}
