@@ -8,7 +8,7 @@
 import {
   Box3, Group, Mesh, MeshStandardMaterial, Object3D, Vector3, type Material, type Texture,
 } from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { loadModel } from '../../assets/loadModel.ts';
 import { createCanopyMaterial } from './CanopyMaterial.ts';
 import type { AircraftVisualState } from './FighterModel.ts';
 import { setAirframe } from './Airframe.ts';
@@ -33,18 +33,13 @@ let loaded: Group | null = null;
 
 /** Loads the F-22 (never rejects; false keeps the procedural XF-41). */
 export async function preloadF22(onProgress?: (frac: number) => void): Promise<boolean> {
-  for (const file of ['models/f22.glb', 'models/f22.json']) {
-    try {
-      const gltf = await new GLTFLoader().loadAsync(new URL(file, document.baseURI).href, (e) => {
-        if (e.total) onProgress?.(e.loaded / e.total);
-      });
-      loaded = gltf.scene;
-      return true;
-    } catch (err) {
-      console.warn(`F-22: ${file} not available`, err);
-    }
+  try {
+    loaded = await loadModel('f22', onProgress);
+    return true;
+  } catch (err) {
+    console.warn('F-22 model not available, using the procedural XF-41', err);
+    return false;
   }
-  return false;
 }
 
 export function hasF22(): boolean {

@@ -19,16 +19,57 @@ if (existsSync('dist/textures')) cpSync('dist/textures', join(out, 'textures'), 
 // F-16 cockpit model (GPL, credits alongside)
 if (existsSync('dist/models')) {
   cpSync('dist/models', join(out, 'models'), { recursive: true });
-  // the artifact host does not serve .glb: ship each model as glTF JSON with
-  // the binary chunk embedded as a data URI (the loaders fall back to it)
+  // the artifact host serves no binary model type and its page refuses
+  // fetches of data: URIs. Ship each model as the GLB in base64 text
+  // (<name>.glb.txt, read by src/assets/loadModel.ts) with every texture
+  // moved out to a sibling image file that loads like any published file.
   for (const f of readdirSync(join(out, 'models')).filter((f) => f.endsWith('.glb'))) {
+    const name = f.replace(/\.glb$/, '');
     const glb = readFileSync(join(out, 'models', f));
     const jsonLen = glb.readUInt32LE(12);
     const gltf = JSON.parse(glb.subarray(20, 20 + jsonLen).toString('utf8'));
     const binStart = 20 + jsonLen;
     const bin = glb.subarray(binStart + 8, binStart + 8 + glb.readUInt32LE(binStart));
-    gltf.buffers = [{ byteLength: bin.length, uri: 'data:application/octet-stream;base64,' + bin.toString('base64') }];
-    writeFileSync(join(out, 'models', f.replace(/\.glb$/, '.json')), JSON.stringify(gltf));
+    const views = gltf.bufferViews;
+    const imageViews = new Set();
+    (gltf.images ?? []).forEach((img, i) => {
+      if (img.bufferView === undefined) return;
+      const v = views[img.bufferView];
+      const ext = img.mimeType === 'image/png' ? 'png' : 'jpg';
+      const file = `${name}_tex${i}.${ext}`;
+      writeFileSync(join(out, 'models', file), bin.subarray(v.byteOffset ?? 0, (v.byteOffset ?? 0) + v.byteLength));
+      imageViews.add(img.bufferView);
+      img.uri = file;
+      delete img.bufferView;
+      delete img.mimeType;
+    });
+    // compact the binary chunk without the image bytes
+    const remap = new Map();
+    const parts = [];
+    let offset = 0;
+    const kept = [];
+    views.forEach((v, i) => {
+      if (imageViews.has(i)) return;
+      const data = bin.subarray(v.byteOffset ?? 0, (v.byteOffset ?? 0) + v.byteLength);
+      const pad = (4 - (data.length % 4)) % 4;
+      remap.set(i, kept.length);
+      kept.push({ ...v, byteOffset: offset });
+      parts.push(data, Buffer.alloc(pad));
+      offset += data.length + pad;
+    });
+    gltf.bufferViews = kept;
+    for (const a of gltf.accessors ?? []) if (a.bufferView !== undefined) a.bufferView = remap.get(a.bufferView);
+    gltf.buffers = [{ byteLength: offset }];
+    let json = Buffer.from(JSON.stringify(gltf));
+    json = Buffer.concat([json, Buffer.alloc((4 - (json.length % 4)) % 4, 0x20)]);
+    const newBin = Buffer.concat(parts);
+    const head = Buffer.alloc(12);
+    head.writeUInt32LE(0x46546c67, 0);
+    head.writeUInt32LE(2, 4);
+    head.writeUInt32LE(12 + 8 + json.length + 8 + newBin.length, 8);
+    const ch = (len, type) => { const b = Buffer.alloc(8); b.writeUInt32LE(len, 0); b.writeUInt32LE(type, 4); return b; };
+    const packed = Buffer.concat([head, ch(json.length, 0x4e4f534a), json, ch(newBin.length, 0x004e4942), newBin]);
+    writeFileSync(join(out, 'models', name + '.glb.txt'), packed.toString('base64'));
     rmSync(join(out, 'models', f));
   }
 }

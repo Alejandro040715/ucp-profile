@@ -12,7 +12,7 @@
 import {
   Color, Group, Matrix4, Mesh, MeshStandardMaterial, Quaternion, Vector3, type Material, type Object3D, type Texture,
 } from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { loadModel } from '../assets/loadModel.ts';
 import { worldMaterial, type ShaderHook } from '../render/Materials.ts';
 
 export interface F16Anim {
@@ -81,20 +81,13 @@ function f16Material<T extends Material>(m: T): T {
 
 /** Loads the cockpit GLB (never rejects; returns false when unavailable). */
 export async function preloadF16Cockpit(onProgress?: (frac: number) => void): Promise<boolean> {
-  // binary glTF, or the same model as glTF JSON (hosts that do not serve .glb)
-  for (const file of ['models/f16-cockpit.glb', 'models/f16-cockpit.json']) {
-    try {
-      const gltf = await new GLTFLoader().loadAsync(new URL(file, document.baseURI).href, (e) => {
-        if (e.total) onProgress?.(e.loaded / e.total);
-      });
-      loaded = gltf.scene;
-      return true;
-    } catch (err) {
-      console.warn(`F-16 cockpit: ${file} not available`, err);
-    }
+  try {
+    loaded = await loadModel('f16-cockpit', onProgress);
+    return true;
+  } catch (err) {
+    console.warn('F-16 cockpit model not available, using the procedural cockpit', err);
+    return false;
   }
-  console.warn('F-16 cockpit model not available, using the procedural cockpit');
-  return false;
 }
 
 export function hasF16Cockpit(): boolean {
